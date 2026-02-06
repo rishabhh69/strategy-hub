@@ -29,7 +29,7 @@ export default function Auth() {
         
         if (error) throw error;
         toast.success("Welcome back!");
-        navigate("/");
+        navigate("/strategy-studio");
       } else {
         const { error } = await supabase.auth.signUp({
           email,
@@ -43,7 +43,8 @@ export default function Auth() {
         });
         
         if (error) throw error;
-        toast.success("Check your email to confirm your account!");
+        toast.success("Account created! Welcome to Tradeky.");
+        navigate("/strategy-studio");
       }
     } catch (error: any) {
       toast.error(error.message);

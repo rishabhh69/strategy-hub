@@ -1,4 +1,5 @@
-import { User, Crown, Bell, Menu } from "lucide-react";
+import { User, Crown, Bell, Menu, LogOut } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -9,12 +10,22 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { TickerTape } from "./TickerTape";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 interface TopbarProps {
   onMenuClick?: () => void;
 }
 
 export function Topbar({ onMenuClick }: TopbarProps) {
+  const navigate = useNavigate();
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    toast.success("Signed out successfully");
+    navigate("/auth");
+  };
+
   return (
     <div className="flex flex-col border-b border-border">
       {/* Ticker Tape */}
@@ -63,10 +74,17 @@ export function Topbar({ onMenuClick }: TopbarProps) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem>Profile</DropdownMenuItem>
-              <DropdownMenuItem>Settings</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => navigate("/profile")}>
+                Profile
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => navigate("/settings")}>
+                Settings
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem>Sign Out</DropdownMenuItem>
+              <DropdownMenuItem onClick={handleSignOut} className="text-loss">
+                <LogOut className="w-4 h-4 mr-2" />
+                Sign Out
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
