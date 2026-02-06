@@ -1,12 +1,90 @@
-import { User, Bell, Shield, CreditCard, Key, Palette, Globe } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { User, Bell, Shield, CreditCard, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { MainLayout } from "@/components/layout/MainLayout";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 export default function Settings() {
+  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!user) {
+        navigate("/auth");
+        return;
+      }
+
+      setEmail(user.email ?? "");
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("username")
+        .eq("user_id", user.id)
+        .single();
+
+      if (profile?.username) {
+        setUsername(profile.username);
+      }
+
+      setLoading(false);
+    };
+
+    fetchUserData();
+  }, [navigate]);
+
+  const handleSaveProfile = async () => {
+    setSaving(true);
+    
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) {
+      toast.error("You must be logged in");
+      setSaving(false);
+      return;
+    }
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ username, updated_at: new Date().toISOString() })
+      .eq("user_id", user.id);
+
+    if (error) {
+      toast.error("Failed to update profile");
+    } else {
+      toast.success("Profile updated successfully");
+    }
+
+    setSaving(false);
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    toast.success("Signed out successfully");
+    navigate("/auth");
+  };
+
+  if (loading) {
+    return (
+      <MainLayout>
+        <div className="flex items-center justify-center h-full">
+          <div className="animate-pulse text-muted-foreground">Loading settings...</div>
+        </div>
+      </MainLayout>
+    );
+  }
+
   return (
     <MainLayout>
       <div className="p-4 md:p-6 max-w-3xl mx-auto">
@@ -29,7 +107,8 @@ export default function Settings() {
                 <Input 
                   id="username" 
                   placeholder="Your username" 
-                  defaultValue="trader_123"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
                   className="bg-background border-border"
                 />
               </div>
@@ -39,11 +118,20 @@ export default function Settings() {
                 <Input 
                   id="email" 
                   type="email" 
-                  placeholder="your@email.com"
-                  defaultValue="trader@example.com"
-                  className="bg-background border-border"
+                  value={email}
+                  disabled
+                  className="bg-muted border-border text-muted-foreground"
                 />
+                <p className="text-xs text-muted-foreground">Email cannot be changed</p>
               </div>
+
+              <Button 
+                onClick={handleSaveProfile} 
+                disabled={saving}
+                className="w-fit"
+              >
+                {saving ? "Saving..." : "Save Changes"}
+              </Button>
             </div>
           </div>
           
@@ -117,6 +205,24 @@ export default function Settings() {
               </p>
               <Button variant="outline" className="border-gold text-gold hover:bg-gold/10">
                 Apply for Verification
+              </Button>
+            </div>
+          </div>
+
+          {/* Sign Out */}
+          <div className="p-6 rounded-xl bg-card border border-border">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-foreground">Sign Out</p>
+                <p className="text-xs text-muted-foreground">Sign out of your account</p>
+              </div>
+              <Button 
+                variant="outline" 
+                onClick={handleSignOut}
+                className="text-loss border-loss/30 hover:bg-loss/10"
+              >
+                <LogOut className="w-4 h-4 mr-2" />
+                Sign Out
               </Button>
             </div>
           </div>

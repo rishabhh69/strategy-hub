@@ -8,6 +8,7 @@ import StrategyStudio from "./pages/StrategyStudio";
 import Marketplace from "./pages/Marketplace";
 import Community from "./pages/Community";
 import Settings from "./pages/Settings";
+import Profile from "./pages/Profile";
 import Auth from "./pages/Auth";
 import LiveTerminal from "./pages/LiveTerminal";
 import NotFound from "./pages/NotFound";
@@ -26,6 +27,7 @@ const App = () => (
           <Route path="/marketplace" element={<Marketplace />} />
           <Route path="/community" element={<Community />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/profile" element={<Profile />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/terminal" element={<LiveTerminal />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
