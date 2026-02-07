@@ -14,6 +14,8 @@ import { EquityCurveChart } from "@/components/charts/EquityCurveChart";
 import { MetricsGrid } from "@/components/studio/MetricsGrid";
 import { CodeViewer } from "@/components/studio/CodeViewer";
 import { MainLayout } from "@/components/layout/MainLayout";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 const tickers = [
   { value: "RELIANCE", label: "RELIANCE.NS" },
@@ -50,7 +52,31 @@ export default function StrategyStudio() {
     setError(null);
     setHasResults(false);
     
+    // Get current user for logging
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    let sentimentLogId: string | null = null;
+
     try {
+      // Log the backtest attempt to sentiment_logs (silently)
+      if (user) {
+        const { data: logData, error: logError } = await supabase
+          .from("sentiment_logs")
+          .insert({
+            user_id: user.id,
+            ticker: selectedTicker,
+            prompt: strategyInput,
+            result_summary: null,
+          })
+          .select("id")
+          .single();
+
+        if (!logError && logData) {
+          sentimentLogId = logData.id;
+        }
+      }
+
+      // Call Python backend
       const response = await fetch("http://127.0.0.1:8000/backtest", {
         method: "POST",
         headers: {
@@ -70,6 +96,20 @@ export default function StrategyStudio() {
       const data: BacktestResult = await response.json();
       setBacktestResult(data);
       setHasResults(true);
+
+      // Update the sentiment log with results (silently)
+      if (sentimentLogId && user) {
+        await supabase
+          .from("sentiment_logs")
+          .update({
+            result_summary: {
+              cagr: data.metrics.cagr,
+              drawdown: data.metrics.drawdown,
+              sharpe: data.metrics.sharpe,
+            },
+          })
+          .eq("id", sentimentLogId);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to run backtest");
       setHasResults(false);
