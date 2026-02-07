@@ -1,7 +1,1 @@
 project_id = "dusszcbhtpmiaowuusjh"
-
-[functions.stock-quote]
-verify_jwt = false
-
-[functions.risk-monitor]
-verify_jwt = false

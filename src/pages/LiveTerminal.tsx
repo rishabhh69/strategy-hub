@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,13 +7,15 @@ import {
   TrendingDown, 
   Activity, 
   AlertTriangle, 
+  Play, 
   Square, 
+  Wallet, 
+  BarChart3,
   Radio,
   ArrowUpRight,
   ArrowDownRight,
   Clock,
-  Zap,
-  RefreshCw
+  Zap
 } from "lucide-react";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { 
@@ -27,39 +29,74 @@ import {
   ComposedChart,
   Bar
 } from "recharts";
-import { useLiveMarketData, useRiskMonitor } from "@/hooks/use-live-market-data";
-import { RiskMonitorPanel } from "@/components/terminal/RiskMonitorPanel";
-import { toast } from "sonner";
 
-// Strategy definitions - "Greed System" is the main one
+// Mock candlestick-style data for the chart
+const generateChartData = () => {
+  const data = [];
+  let price = 22500;
+  for (let i = 0; i < 60; i++) {
+    const change = (Math.random() - 0.48) * 100;
+    price += change;
+    const time = `${9 + Math.floor(i / 12)}:${String((i % 12) * 5).padStart(2, '0')}`;
+    data.push({
+      time,
+      price: Math.round(price * 100) / 100,
+      volume: Math.floor(Math.random() * 50000) + 10000,
+      open: price - change / 2,
+      close: price + change / 2,
+      high: price + Math.abs(change),
+      low: price - Math.abs(change),
+    });
+  }
+  return data;
+};
+
+const chartData = generateChartData();
+
+// Mock running strategies
 const runningStrategies = [
   {
     id: 1,
-    name: "Greed System",
-    ticker: "RELIANCE",
-    symbol: "RELIANCE.NS",
+    name: "RSI Momentum Strategy",
+    ticker: "NIFTY 50",
     status: "scanning",
-    entryPrice: 2800,
-    quantity: 100,
+    pnl: 45200,
+    lastSignal: "Buy @ 9:45 AM",
+    positions: 2,
   },
   {
     id: 2,
     name: "MACD Crossover",
-    ticker: "TATAMOTORS",
-    symbol: "TATAMOTORS.NS",
+    ticker: "BANKNIFTY",
     status: "holding",
-    entryPrice: 750,
-    quantity: 50,
+    pnl: -12500,
+    lastSignal: "Sell @ 10:15 AM",
+    positions: 1,
   },
   {
     id: 3,
     name: "Mean Reversion",
-    ticker: "TCS",
-    symbol: "TCS.NS",
+    ticker: "RELIANCE",
     status: "scanning",
-    entryPrice: 4200,
-    quantity: 25,
+    pnl: 28750,
+    lastSignal: "Hold",
+    positions: 0,
   },
+];
+
+// Mock order log entries
+const orderLog = [
+  { time: "10:32:15", type: "signal", message: "Algo Triggered: BUY 50 Qty NIFTY 22500 CE" },
+  { time: "10:32:17", type: "order", message: "Order Placed @ ₹245.50" },
+  { time: "10:32:18", type: "fill", message: "Order Filled @ ₹245.75 (Slippage: ₹0.25)" },
+  { time: "10:28:42", type: "signal", message: "Trailing Stop Updated: ₹22,450 → ₹22,520" },
+  { time: "10:25:01", type: "info", message: "RSI crossed below 30 for BANKNIFTY" },
+  { time: "10:15:33", type: "signal", message: "Algo Triggered: SELL 25 Qty BANKNIFTY FUT" },
+  { time: "10:15:35", type: "fill", message: "Order Filled @ ₹48,250.00" },
+  { time: "10:00:01", type: "info", message: "Market Open. All bots activated." },
+  { time: "09:58:30", type: "system", message: "Pre-market scan complete. 3 opportunities identified." },
+  { time: "09:45:12", type: "signal", message: "Algo Triggered: BUY 100 Qty RELIANCE" },
+  { time: "09:45:15", type: "fill", message: "Order Filled @ ₹2,847.65" },
 ];
 
 const getLogTypeColor = (type: string) => {
@@ -69,7 +106,6 @@ const getLogTypeColor = (type: string) => {
     case "fill": return "text-profit";
     case "info": return "text-muted-foreground";
     case "system": return "text-gold";
-    case "risk": return "text-loss";
     default: return "text-foreground";
   }
 };
@@ -91,108 +127,42 @@ const StatusBadge = ({ status }: { status: string }) => {
   );
 };
 
-interface OrderLogEntry {
-  time: string;
-  type: string;
-  message: string;
-}
-
 export default function LiveTerminal() {
   const [selectedBot, setSelectedBot] = useState(runningStrategies[0]);
-  const [orderLog, setOrderLog] = useState<OrderLogEntry[]>([
-    { time: "09:15:00", type: "system", message: "Market Open. Greed System activated." },
-  ]);
-  const [peakPortfolioValue, setPeakPortfolioValue] = useState(10000000);
-  const [drawdownThreshold] = useState(5); // 5% drawdown threshold
-  const [isMonitoringEnabled, setIsMonitoringEnabled] = useState(true);
-  const priceHistoryRef = useRef<number[]>([]);
+  const [livePrice, setLivePrice] = useState<number | null>(null);
+  const [liveChangePercent, setLiveChangePercent] = useState<number>(0);
+  const [isLoadingQuote, setIsLoadingQuote] = useState(false);
   
-  // Live market data for selected bot
-  const { quote, chartData, isLoading, error, lastUpdated, refetch } = useLiveMarketData(
-    selectedBot.symbol,
-    5000 // Poll every 5 seconds
-  );
-
-  // Calculate positions with live prices
-  const positions = runningStrategies.map(s => {
-    const currentPrice = s.id === selectedBot.id && quote ? quote.price : s.entryPrice * 1.02;
-    const pnl = (currentPrice - s.entryPrice) * s.quantity;
-    return {
-      symbol: s.symbol,
-      entryPrice: s.entryPrice,
-      currentPrice,
-      quantity: s.quantity,
-      pnl,
+  // Poll for live quote every 3 seconds
+  useEffect(() => {
+    const fetchQuote = async () => {
+      setIsLoadingQuote(true);
+      try {
+        const response = await fetch("http://127.0.0.1:8000/quote/RELIANCE.NS");
+        if (response.ok) {
+          const data = await response.json();
+          setLivePrice(data.price);
+          setLiveChangePercent(data.change_percent);
+        }
+      } catch (error) {
+        console.error("Failed to fetch quote:", error);
+      } finally {
+        setIsLoadingQuote(false);
+      }
     };
-  });
-
-  const totalPnl = positions.reduce((acc, p) => acc + p.pnl, 0);
-  const portfolioValue = 10000000 + totalPnl;
-  const totalPositions = positions.filter(p => p.quantity > 0).length;
-
-  // Track peak value
-  useEffect(() => {
-    if (portfolioValue > peakPortfolioValue) {
-      setPeakPortfolioValue(portfolioValue);
-    }
-  }, [portfolioValue, peakPortfolioValue]);
-
-  // Track recent prices for momentum
-  useEffect(() => {
-    if (quote?.price) {
-      priceHistoryRef.current = [...priceHistoryRef.current.slice(-20), quote.price];
-    }
-  }, [quote?.price]);
-
-  // ML Risk Monitor
-  const { riskAnalysis, isAnalyzing } = useRiskMonitor(
-    portfolioValue,
-    peakPortfolioValue,
-    positions,
-    priceHistoryRef.current,
-    drawdownThreshold,
-    isMonitoringEnabled
-  );
-
-  // Add log entries for events
-  const addLogEntry = (type: string, message: string) => {
-    const now = new Date();
-    const time = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    setOrderLog(prev => [{ time, type, message }, ...prev.slice(0, 49)]);
-  };
-
-  // Log risk alerts
-  useEffect(() => {
-    if (riskAnalysis?.shouldExit) {
-      addLogEntry("risk", `🚨 RISK ALERT: ${riskAnalysis.reason}`);
-    }
-  }, [riskAnalysis?.shouldExit]);
-
-  // Log price updates periodically
-  useEffect(() => {
-    if (quote && !isLoading) {
-      const changeIcon = quote.changePercent >= 0 ? "📈" : "📉";
-      addLogEntry("info", `${changeIcon} ${selectedBot.ticker} @ ₹${quote.price.toFixed(2)} (${quote.changePercent >= 0 ? '+' : ''}${quote.changePercent.toFixed(2)}%)`);
-    }
-  }, [quote?.timestamp]);
-
-  const handleEmergencyExit = () => {
-    addLogEntry("risk", "🛑 EMERGENCY EXIT: All positions closed by Greed System");
-    toast.success("All positions closed", { description: "Emergency exit executed successfully" });
-    setIsMonitoringEnabled(false);
-  };
-
-  const handleManualBuy = () => {
-    addLogEntry("order", `Manual BUY order: 10 Qty ${selectedBot.ticker} @ ₹${quote?.price.toFixed(2) || 'Market'}`);
-    addLogEntry("fill", `Order Filled @ ₹${quote?.price.toFixed(2) || 'Market'}`);
-    toast.success("Buy order executed");
-  };
-
-  const handleManualSell = () => {
-    addLogEntry("order", `Manual SELL order: 10 Qty ${selectedBot.ticker} @ ₹${quote?.price.toFixed(2) || 'Market'}`);
-    addLogEntry("fill", `Order Filled @ ₹${quote?.price.toFixed(2) || 'Market'}`);
-    toast.success("Sell order executed");
-  };
+    
+    // Fetch immediately
+    fetchQuote();
+    
+    // Then poll every 3 seconds
+    const interval = setInterval(fetchQuote, 3000);
+    
+    return () => clearInterval(interval);
+  }, []);
+  
+  const totalPnl = runningStrategies.reduce((acc, s) => acc + s.pnl, 0);
+  const totalPositions = runningStrategies.reduce((acc, s) => acc + s.positions, 0);
+  const netLiquidation = 10000000 + totalPnl;
 
   return (
     <MainLayout>
@@ -203,8 +173,8 @@ export default function LiveTerminal() {
             {/* Net Liquidation */}
             <div>
               <div className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Net Liquidation</div>
-              <div className={`text-2xl md:text-3xl font-bold font-data ${totalPnl >= 0 ? 'text-profit' : 'text-loss'}`}>
-                ₹{portfolioValue.toLocaleString('en-IN')}
+              <div className="text-2xl md:text-3xl font-bold font-data text-profit">
+                ₹{netLiquidation.toLocaleString('en-IN')}
               </div>
             </div>
             
@@ -213,7 +183,7 @@ export default function LiveTerminal() {
               <div className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Day P&L</div>
               <div className={`text-2xl md:text-3xl font-bold font-data flex items-center gap-2 ${totalPnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                 {totalPnl >= 0 ? <ArrowUpRight className="w-6 h-6" /> : <ArrowDownRight className="w-6 h-6" />}
-                {totalPnl >= 0 ? '+' : ''}₹{Math.abs(totalPnl).toLocaleString('en-IN')}
+                {totalPnl >= 0 ? '+' : ''}₹{totalPnl.toLocaleString('en-IN')}
               </div>
             </div>
             
@@ -238,82 +208,56 @@ export default function LiveTerminal() {
 
         {/* Main 3-Column Layout */}
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 overflow-hidden">
-          {/* Left Column - Active Bots + Risk Monitor */}
+          {/* Left Column - Active Bots */}
           <div className="lg:col-span-3 flex flex-col gap-4 overflow-auto">
-            {/* Risk Monitor Panel */}
-            <RiskMonitorPanel
-              riskAnalysis={riskAnalysis}
-              isAnalyzing={isAnalyzing}
-              drawdownThreshold={drawdownThreshold}
-              onEmergencyExit={handleEmergencyExit}
-            />
-
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide">Running Strategies</h2>
               <Badge variant="outline" className="font-data">{runningStrategies.length}</Badge>
             </div>
             
-            {runningStrategies.map((strategy, i) => {
-              const position = positions[i];
-              return (
-                <Card 
-                  key={strategy.id} 
-                  className={`cursor-pointer transition-all ${selectedBot.id === strategy.id ? 'border-primary bg-primary/5' : 'hover:border-border-bright'}`}
-                  onClick={() => setSelectedBot(strategy)}
-                >
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <h3 className="font-medium text-foreground text-sm">{strategy.name}</h3>
-                        <p className="text-xs text-muted-foreground font-mono">{strategy.ticker}</p>
-                      </div>
-                      <StatusBadge status={strategy.status} />
+            {runningStrategies.map((strategy) => (
+              <Card 
+                key={strategy.id} 
+                className={`cursor-pointer transition-all ${selectedBot.id === strategy.id ? 'border-primary bg-primary/5' : 'hover:border-border-bright'}`}
+                onClick={() => setSelectedBot(strategy)}
+              >
+                <CardContent className="p-4">
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <h3 className="font-medium text-foreground text-sm">{strategy.name}</h3>
+                      <p className="text-xs text-muted-foreground font-mono">{strategy.ticker}</p>
                     </div>
-                    
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">P&L</span>
-                      <span className={`font-data font-medium ${position.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
-                        {position.pnl >= 0 ? '+' : ''}₹{position.pnl.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                      </span>
-                    </div>
-                    
-                    <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
-                      <Clock className="w-3 h-3" />
-                      <span>Entry @ ₹{strategy.entryPrice}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
+                    <StatusBadge status={strategy.status} />
+                  </div>
+                  
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">P&L</span>
+                    <span className={`font-data font-medium ${strategy.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
+                      {strategy.pnl >= 0 ? '+' : ''}₹{strategy.pnl.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
+                    <Clock className="w-3 h-3" />
+                    <span>{strategy.lastSignal}</span>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
             
             {/* Control Buttons */}
             <div className="mt-auto space-y-2 pt-4 border-t border-border">
               <div className="grid grid-cols-2 gap-2">
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="text-profit border-profit/30 hover:bg-profit/10"
-                  onClick={handleManualBuy}
-                >
+                <Button variant="outline" size="sm" className="text-profit border-profit/30 hover:bg-profit/10">
                   <TrendingUp className="w-4 h-4 mr-1" />
                   Buy
                 </Button>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="text-loss border-loss/30 hover:bg-loss/10"
-                  onClick={handleManualSell}
-                >
+                <Button variant="outline" size="sm" className="text-loss border-loss/30 hover:bg-loss/10">
                   <TrendingDown className="w-4 h-4 mr-1" />
                   Sell
                 </Button>
               </div>
-              <Button 
-                variant="destructive" 
-                size="sm" 
-                className="w-full"
-                onClick={handleEmergencyExit}
-              >
+              <Button variant="destructive" size="sm" className="w-full">
                 <AlertTriangle className="w-4 h-4 mr-2" />
                 Emergency Stop All
               </Button>
@@ -327,115 +271,78 @@ export default function LiveTerminal() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <CardTitle className="text-base font-medium">{selectedBot.ticker}</CardTitle>
-                    <Badge variant="secondary" className="font-mono text-xs">LIVE</Badge>
-                    {error && <Badge variant="destructive" className="text-xs">Error</Badge>}
+                    <Badge variant="secondary" className="font-mono text-xs">1m</Badge>
                   </div>
                   <div className="flex items-center gap-4 text-sm">
-                    <button 
-                      onClick={refetch} 
-                      className="text-muted-foreground hover:text-foreground transition-colors"
-                      disabled={isLoading}
-                    >
-                      <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-                    </button>
                     <span className="font-data text-foreground">
-                      {quote 
-                        ? `₹${quote.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                        : isLoading 
+                      {livePrice !== null 
+                        ? `₹${livePrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                        : isLoadingQuote 
                           ? "Loading..."
-                          : "—"
+                          : `₹${chartData[chartData.length - 1].price.toLocaleString('en-IN')}`
                       }
                     </span>
-                    {quote && (
-                      <span className={`font-data flex items-center gap-1 ${quote.changePercent >= 0 ? 'text-profit' : 'text-loss'}`}>
-                        {quote.changePercent >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                        {quote.changePercent >= 0 ? '+' : ''}{quote.changePercent.toFixed(2)}%
-                      </span>
-                    )}
+                    <span className={`font-data flex items-center gap-1 ${liveChangePercent >= 0 ? 'text-profit' : 'text-loss'}`}>
+                      {liveChangePercent >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                      {liveChangePercent >= 0 ? '+' : ''}{liveChangePercent.toFixed(2)}%
+                    </span>
                   </div>
                 </div>
-                {lastUpdated && (
-                  <div className="text-xs text-muted-foreground mt-1">
-                    Last updated: {lastUpdated.toLocaleTimeString()}
-                  </div>
-                )}
               </CardHeader>
               <CardContent className="flex-1 p-4">
-                {chartData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={chartData}>
-                      <defs>
-                        <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid 
-                        strokeDasharray="3 3" 
-                        stroke="hsl(var(--border))" 
-                        vertical={false}
-                      />
-                      <XAxis 
-                        dataKey="time" 
-                        axisLine={false}
-                        tickLine={false}
-                        tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
-                        interval="preserveStartEnd"
-                      />
-                      <YAxis 
-                        domain={['auto', 'auto']}
-                        axisLine={false}
-                        tickLine={false}
-                        tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
-                        tickFormatter={(v) => `₹${v.toLocaleString()}`}
-                        width={70}
-                      />
-                      <Tooltip 
-                        contentStyle={{ 
-                          backgroundColor: 'hsl(var(--popover))', 
-                          border: '1px solid hsl(var(--border))',
-                          borderRadius: '8px',
-                          fontSize: '12px'
-                        }}
-                        labelStyle={{ color: 'hsl(var(--foreground))' }}
-                        formatter={(value: number) => [`₹${value.toLocaleString()}`, 'Price']}
-                      />
-                      <Bar 
-                        dataKey="volume" 
-                        fill="hsl(var(--muted))" 
-                        opacity={0.3}
-                        yAxisId="volume"
-                      />
-                      <YAxis yAxisId="volume" orientation="right" hide />
-                      <Area 
-                        type="monotone" 
-                        dataKey="price" 
-                        stroke="hsl(var(--primary))" 
-                        strokeWidth={2}
-                        fill="url(#priceGradient)" 
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-muted-foreground">
-                    <div className="text-center">
-                      {isLoading ? (
-                        <>
-                          <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin" />
-                          <p className="text-sm">Loading live data...</p>
-                        </>
-                      ) : error ? (
-                        <>
-                          <AlertTriangle className="w-8 h-8 mx-auto mb-2 text-loss" />
-                          <p className="text-sm text-loss">{error}</p>
-                          <p className="text-xs mt-1">Market may be closed</p>
-                        </>
-                      ) : (
-                        <p className="text-sm">No chart data available</p>
-                      )}
-                    </div>
-                  </div>
-                )}
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={chartData}>
+                    <defs>
+                      <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid 
+                      strokeDasharray="3 3" 
+                      stroke="hsl(var(--border))" 
+                      vertical={false}
+                    />
+                    <XAxis 
+                      dataKey="time" 
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis 
+                      domain={['auto', 'auto']}
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
+                      tickFormatter={(v) => v.toLocaleString()}
+                      width={60}
+                    />
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: 'hsl(var(--popover))', 
+                        border: '1px solid hsl(var(--border))',
+                        borderRadius: '8px',
+                        fontSize: '12px'
+                      }}
+                      labelStyle={{ color: 'hsl(var(--foreground))' }}
+                    />
+                    <Bar 
+                      dataKey="volume" 
+                      fill="hsl(var(--muted))" 
+                      opacity={0.3}
+                      yAxisId="volume"
+                    />
+                    <YAxis yAxisId="volume" orientation="right" hide />
+                    <Area 
+                      type="monotone" 
+                      dataKey="price" 
+                      stroke="hsl(var(--primary))" 
+                      strokeWidth={2}
+                      fill="url(#priceGradient)" 
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
               </CardContent>
             </Card>
           </div>
