@@ -4,7 +4,8 @@ import {
   Users, 
   Settings, 
   TrendingUp,
-  ChevronLeft
+  ChevronLeft,
+  Monitor
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -19,7 +20,7 @@ const navItems = [
   { 
     title: "Strategy Studio", 
     icon: Beaker, 
-    path: "/",
+    path: "/strategy-studio",
     description: "Build & backtest"
   },
   { 
@@ -33,6 +34,12 @@ const navItems = [
     icon: Users, 
     path: "/community",
     description: "Discussion"
+  },
+  { 
+    title: "Live Terminal", 
+    icon: Monitor, 
+    path: "/terminal",
+    description: "Execute & monitor"
   },
   { 
     title: "Settings", 
