@@ -8,52 +8,105 @@ interface Metric {
   description: string;
 }
 
-const metrics: Metric[] = [
-  {
-    label: "CAGR",
-    value: "24.7%",
-    change: 24.7,
-    icon: TrendingUp,
-    description: "Compound Annual Growth Rate",
-  },
-  {
-    label: "Max Drawdown",
-    value: "-12.4%",
-    change: -12.4,
-    icon: TrendingDown,
-    description: "Maximum peak-to-trough decline",
-  },
-  {
-    label: "Sharpe Ratio",
-    value: "1.82",
-    change: 1.82,
-    icon: Activity,
-    description: "Risk-adjusted return metric",
-  },
-  {
-    label: "Win Rate",
-    value: "64.2%",
-    change: 64.2,
-    icon: Target,
-    description: "Percentage of profitable trades",
-  },
-  {
-    label: "Volatility",
-    value: "18.3%",
-    change: -18.3,
-    icon: AlertTriangle,
-    description: "Annualized standard deviation",
-  },
-  {
-    label: "Sortino Ratio",
-    value: "2.14",
-    change: 2.14,
-    icon: Percent,
-    description: "Downside risk-adjusted return",
-  },
-];
+interface MetricsGridProps {
+  metrics?: {
+    cagr: number;
+    drawdown: number;
+    sharpe: number;
+  };
+}
 
-export function MetricsGrid() {
+export function MetricsGrid({ metrics: providedMetrics }: MetricsGridProps) {
+  // Use provided metrics or fallback to defaults
+  const metrics: Metric[] = providedMetrics
+    ? [
+        {
+          label: "CAGR",
+          value: `${providedMetrics.cagr.toFixed(2)}%`,
+          change: providedMetrics.cagr,
+          icon: TrendingUp,
+          description: "Compound Annual Growth Rate",
+        },
+        {
+          label: "Max Drawdown",
+          value: `${providedMetrics.drawdown.toFixed(2)}%`,
+          change: providedMetrics.drawdown,
+          icon: TrendingDown,
+          description: "Maximum peak-to-trough decline",
+        },
+        {
+          label: "Sharpe Ratio",
+          value: providedMetrics.sharpe.toFixed(2),
+          change: providedMetrics.sharpe,
+          icon: Activity,
+          description: "Risk-adjusted return metric",
+        },
+        {
+          label: "Win Rate",
+          value: "N/A",
+          change: undefined,
+          icon: Target,
+          description: "Percentage of profitable trades",
+        },
+        {
+          label: "Volatility",
+          value: "N/A",
+          change: undefined,
+          icon: AlertTriangle,
+          description: "Annualized standard deviation",
+        },
+        {
+          label: "Sortino Ratio",
+          value: "N/A",
+          change: undefined,
+          icon: Percent,
+          description: "Downside risk-adjusted return",
+        },
+      ]
+    : [
+        {
+          label: "CAGR",
+          value: "24.7%",
+          change: 24.7,
+          icon: TrendingUp,
+          description: "Compound Annual Growth Rate",
+        },
+        {
+          label: "Max Drawdown",
+          value: "-12.4%",
+          change: -12.4,
+          icon: TrendingDown,
+          description: "Maximum peak-to-trough decline",
+        },
+        {
+          label: "Sharpe Ratio",
+          value: "1.82",
+          change: 1.82,
+          icon: Activity,
+          description: "Risk-adjusted return metric",
+        },
+        {
+          label: "Win Rate",
+          value: "64.2%",
+          change: 64.2,
+          icon: Target,
+          description: "Percentage of profitable trades",
+        },
+        {
+          label: "Volatility",
+          value: "18.3%",
+          change: -18.3,
+          icon: AlertTriangle,
+          description: "Annualized standard deviation",
+        },
+        {
+          label: "Sortino Ratio",
+          value: "2.14",
+          change: 2.14,
+          icon: Percent,
+          description: "Downside risk-adjusted return",
+        },
+      ];
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
       {metrics.map((metric) => {

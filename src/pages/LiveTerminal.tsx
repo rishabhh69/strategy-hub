@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -129,6 +129,36 @@ const StatusBadge = ({ status }: { status: string }) => {
 
 export default function LiveTerminal() {
   const [selectedBot, setSelectedBot] = useState(runningStrategies[0]);
+  const [livePrice, setLivePrice] = useState<number | null>(null);
+  const [liveChangePercent, setLiveChangePercent] = useState<number>(0);
+  const [isLoadingQuote, setIsLoadingQuote] = useState(false);
+  
+  // Poll for live quote every 3 seconds
+  useEffect(() => {
+    const fetchQuote = async () => {
+      setIsLoadingQuote(true);
+      try {
+        const response = await fetch("http://127.0.0.1:8000/quote/RELIANCE.NS");
+        if (response.ok) {
+          const data = await response.json();
+          setLivePrice(data.price);
+          setLiveChangePercent(data.change_percent);
+        }
+      } catch (error) {
+        console.error("Failed to fetch quote:", error);
+      } finally {
+        setIsLoadingQuote(false);
+      }
+    };
+    
+    // Fetch immediately
+    fetchQuote();
+    
+    // Then poll every 3 seconds
+    const interval = setInterval(fetchQuote, 3000);
+    
+    return () => clearInterval(interval);
+  }, []);
   
   const totalPnl = runningStrategies.reduce((acc, s) => acc + s.pnl, 0);
   const totalPositions = runningStrategies.reduce((acc, s) => acc + s.positions, 0);
@@ -244,10 +274,17 @@ export default function LiveTerminal() {
                     <Badge variant="secondary" className="font-mono text-xs">1m</Badge>
                   </div>
                   <div className="flex items-center gap-4 text-sm">
-                    <span className="font-data text-foreground">₹{chartData[chartData.length - 1].price.toLocaleString('en-IN')}</span>
-                    <span className="text-profit font-data flex items-center gap-1">
-                      <TrendingUp className="w-4 h-4" />
-                      +0.42%
+                    <span className="font-data text-foreground">
+                      {livePrice !== null 
+                        ? `₹${livePrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                        : isLoadingQuote 
+                          ? "Loading..."
+                          : `₹${chartData[chartData.length - 1].price.toLocaleString('en-IN')}`
+                      }
+                    </span>
+                    <span className={`font-data flex items-center gap-1 ${liveChangePercent >= 0 ? 'text-profit' : 'text-loss'}`}>
+                      {liveChangePercent >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                      {liveChangePercent >= 0 ? '+' : ''}{liveChangePercent.toFixed(2)}%
                     </span>
                   </div>
                 </div>

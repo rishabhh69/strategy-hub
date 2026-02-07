@@ -2,7 +2,11 @@ import { Copy, Check } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 
-const generatedCode = `import pandas as pd
+interface CodeViewerProps {
+  code?: string;
+}
+
+const defaultCode = `import pandas as pd
 import numpy as np
 from talib import RSI, SMA
 
@@ -53,8 +57,9 @@ if __name__ == "__main__":
     print(f"Sharpe Ratio: {results['strategy_returns'].mean() / results['strategy_returns'].std() * np.sqrt(252):.2f}")
 `;
 
-export function CodeViewer() {
+export function CodeViewer({ code }: CodeViewerProps) {
   const [copied, setCopied] = useState(false);
+  const generatedCode = code || defaultCode;
   
   const handleCopy = () => {
     navigator.clipboard.writeText(generatedCode);

@@ -22,19 +22,60 @@ const tickers = [
   { value: "TCS", label: "TCS.NS" },
 ];
 
+interface BacktestResult {
+  metrics: {
+    cagr: number;
+    drawdown: number;
+    sharpe: number;
+  };
+  chart_data: Array<{
+    time: string;
+    value: number;
+  }>;
+  generated_code: string;
+}
+
 export default function StrategyStudio() {
   const [selectedTicker, setSelectedTicker] = useState("RELIANCE");
   const [strategyInput, setStrategyInput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [hasResults, setHasResults] = useState(false);
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
   
-  const handleRunBacktest = () => {
+  const handleRunBacktest = async () => {
+    if (!strategyInput.trim()) return;
+    
     setIsRunning(true);
-    // Simulate backtest running
-    setTimeout(() => {
-      setIsRunning(false);
+    setError(null);
+    setHasResults(false);
+    
+    try {
+      const response = await fetch("http://127.0.0.1:8000/backtest", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ticker: selectedTicker,
+          prompt: strategyInput,
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: "Unknown error" }));
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      }
+      
+      const data: BacktestResult = await response.json();
+      setBacktestResult(data);
       setHasResults(true);
-    }, 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to run backtest");
+      setHasResults(false);
+    } finally {
+      setIsRunning(false);
+    }
   };
   
   return (
@@ -134,8 +175,22 @@ Examples:
               </div>
               
               <TabsContent value="performance" className="flex-1 m-0 p-4">
-                {hasResults ? (
-                  <EquityCurveChart />
+                {isRunning ? (
+                  <div className="h-full flex items-center justify-center text-muted-foreground">
+                    <div className="text-center">
+                      <BarChart3 className="w-12 h-12 mx-auto mb-3 opacity-30 animate-pulse" />
+                      <p className="text-sm">Loading...</p>
+                    </div>
+                  </div>
+                ) : error ? (
+                  <div className="h-full flex items-center justify-center text-muted-foreground">
+                    <div className="text-center">
+                      <BarChart3 className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                      <p className="text-sm text-loss">{error}</p>
+                    </div>
+                  </div>
+                ) : hasResults && backtestResult ? (
+                  <EquityCurveChart chartData={backtestResult.chart_data} />
                 ) : (
                   <div className="h-full flex items-center justify-center text-muted-foreground">
                     <div className="text-center">
@@ -147,8 +202,22 @@ Examples:
               </TabsContent>
               
               <TabsContent value="metrics" className="flex-1 m-0 p-4 overflow-auto">
-                {hasResults ? (
-                  <MetricsGrid />
+                {isRunning ? (
+                  <div className="h-full flex items-center justify-center text-muted-foreground">
+                    <div className="text-center">
+                      <Calculator className="w-12 h-12 mx-auto mb-3 opacity-30 animate-pulse" />
+                      <p className="text-sm">Loading...</p>
+                    </div>
+                  </div>
+                ) : error ? (
+                  <div className="h-full flex items-center justify-center text-muted-foreground">
+                    <div className="text-center">
+                      <Calculator className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                      <p className="text-sm text-loss">{error}</p>
+                    </div>
+                  </div>
+                ) : hasResults && backtestResult ? (
+                  <MetricsGrid metrics={backtestResult.metrics} />
                 ) : (
                   <div className="h-full flex items-center justify-center text-muted-foreground">
                     <div className="text-center">
@@ -160,8 +229,22 @@ Examples:
               </TabsContent>
               
               <TabsContent value="code" className="flex-1 m-0 overflow-hidden">
-                {hasResults ? (
-                  <CodeViewer />
+                {isRunning ? (
+                  <div className="h-full flex items-center justify-center text-muted-foreground p-4">
+                    <div className="text-center">
+                      <Code className="w-12 h-12 mx-auto mb-3 opacity-30 animate-pulse" />
+                      <p className="text-sm">Loading...</p>
+                    </div>
+                  </div>
+                ) : error ? (
+                  <div className="h-full flex items-center justify-center text-muted-foreground p-4">
+                    <div className="text-center">
+                      <Code className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                      <p className="text-sm text-loss">{error}</p>
+                    </div>
+                  </div>
+                ) : hasResults && backtestResult ? (
+                  <CodeViewer code={backtestResult.generated_code} />
                 ) : (
                   <div className="h-full flex items-center justify-center text-muted-foreground p-4">
                     <div className="text-center">

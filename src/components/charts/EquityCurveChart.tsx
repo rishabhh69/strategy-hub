@@ -1,33 +1,25 @@
 import { Area, AreaChart, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 
-// Mock equity curve data
-const generateEquityCurve = () => {
-  const data = [];
-  let value = 100000;
-  const startDate = new Date('2023-01-01');
-  
-  for (let i = 0; i < 365; i++) {
-    const date = new Date(startDate);
-    date.setDate(date.getDate() + i);
-    
-    // Random walk with slight upward bias
-    const change = (Math.random() - 0.45) * 2000;
-    value = Math.max(80000, value + change);
-    
-    data.push({
-      date: date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }),
-      value: Math.round(value),
-      benchmark: 100000 + (i * 50) + (Math.random() - 0.5) * 1000,
-    });
-  }
-  
-  return data;
-};
+interface ChartDataPoint {
+  time: string;
+  value: number;
+}
 
-const data = generateEquityCurve();
-const isPositive = data[data.length - 1].value > data[0].value;
+interface EquityCurveChartProps {
+  chartData?: ChartDataPoint[];
+}
 
-export function EquityCurveChart() {
+export function EquityCurveChart({ chartData }: EquityCurveChartProps) {
+  // Transform chart data to match component format
+  const data = chartData
+    ? chartData.map((point) => ({
+        date: new Date(point.time).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }),
+        value: point.value,
+        benchmark: 100000, // Simple benchmark, can be enhanced later
+      }))
+    : [];
+  
+  const isPositive = data.length > 0 && data[data.length - 1].value > data[0].value;
   return (
     <div className="h-full w-full">
       <div className="flex items-center justify-between mb-4">
@@ -35,11 +27,13 @@ export function EquityCurveChart() {
           <h3 className="text-sm font-medium text-muted-foreground">Equity Curve</h3>
           <div className="flex items-center gap-3 mt-1">
             <span className="font-data text-2xl text-foreground">
-              ₹{data[data.length - 1].value.toLocaleString('en-IN')}
+              {data.length > 0 ? `₹${data[data.length - 1].value.toLocaleString('en-IN')}` : '₹0'}
             </span>
-            <span className={`font-data text-sm ${isPositive ? 'text-profit' : 'text-loss'}`}>
-              {isPositive ? '+' : ''}{((data[data.length - 1].value / data[0].value - 1) * 100).toFixed(2)}%
-            </span>
+            {data.length > 0 && (
+              <span className={`font-data text-sm ${isPositive ? 'text-profit' : 'text-loss'}`}>
+                {isPositive ? '+' : ''}{((data[data.length - 1].value / data[0].value - 1) * 100).toFixed(2)}%
+              </span>
+            )}
           </div>
         </div>
         
@@ -56,7 +50,7 @@ export function EquityCurveChart() {
       </div>
       
       <ResponsiveContainer width="100%" height={280}>
-        <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <AreaChart data={data.length > 0 ? data : []} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id="profitGradient" x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="hsl(158, 64%, 40%)" stopOpacity={0.4} />
