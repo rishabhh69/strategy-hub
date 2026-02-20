@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Search, Filter, Shield, TrendingUp, AlertTriangle, Star } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Search, Filter, Shield, TrendingUp } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,83 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MainLayout } from "@/components/layout/MainLayout";
-
-interface Strategy {
-  id: string;
-  title: string;
-  description: string;
-  author: {
-    name: string;
-    isSebiVerified: boolean;
-  };
-  sharpeRatio: number;
-  cagr: number;
-  riskScore: 'low' | 'medium' | 'high';
-  subscribers: number;
-}
-
-const mockStrategies: Strategy[] = [
-  {
-    id: "1",
-    title: "Momentum RSI Crossover",
-    description: "Long-only momentum strategy using RSI divergence with price action confirmation on Nifty 50 stocks.",
-    author: { name: "Rajesh Sharma", isSebiVerified: true },
-    sharpeRatio: 1.92,
-    cagr: 28.4,
-    riskScore: "medium",
-    subscribers: 1245,
-  },
-  {
-    id: "2",
-    title: "Mean Reversion Bollinger",
-    description: "Statistical arbitrage strategy exploiting mean reversion in banking sector stocks using Bollinger Bands.",
-    author: { name: "Priya Patel", isSebiVerified: true },
-    sharpeRatio: 2.14,
-    cagr: 22.1,
-    riskScore: "low",
-    subscribers: 892,
-  },
-  {
-    id: "3",
-    title: "MACD Trend Follower",
-    description: "Classic trend following strategy optimized for Indian large-cap equities with dynamic stop-loss.",
-    author: { name: "Arjun Mehta", isSebiVerified: false },
-    sharpeRatio: 1.45,
-    cagr: 18.7,
-    riskScore: "low",
-    subscribers: 567,
-  },
-  {
-    id: "4",
-    title: "Volatility Breakout Pro",
-    description: "High-frequency breakout strategy for volatile market conditions. Requires active monitoring.",
-    author: { name: "Sneha Gupta", isSebiVerified: true },
-    sharpeRatio: 1.78,
-    cagr: 34.2,
-    riskScore: "high",
-    subscribers: 432,
-  },
-  {
-    id: "5",
-    title: "Pairs Trading Nifty",
-    description: "Market-neutral pairs trading strategy on correlated Nifty stocks. Hedged approach.",
-    author: { name: "Vikram Singh", isSebiVerified: false },
-    sharpeRatio: 1.34,
-    cagr: 15.8,
-    riskScore: "low",
-    subscribers: 321,
-  },
-  {
-    id: "6",
-    title: "Options Strangle Seller",
-    description: "Premium collection strategy using weekly options on Bank Nifty. Advanced risk management required.",
-    author: { name: "Deepika Reddy", isSebiVerified: true },
-    sharpeRatio: 2.45,
-    cagr: 42.1,
-    riskScore: "high",
-    subscribers: 1567,
-  },
-];
+import { strategies, type StrategyDetail } from "@/data/strategyMockData";
 
 const riskColors = {
   low: "bg-profit/20 text-profit border-profit/30",
@@ -95,7 +20,7 @@ const riskColors = {
   high: "bg-loss/20 text-loss border-loss/30",
 };
 
-function StrategyCard({ strategy }: { strategy: Strategy }) {
+function StrategyCard({ strategy }: { strategy: StrategyDetail }) {
   return (
     <div className="card-glow bg-card rounded-xl p-5 flex flex-col">
       {/* Header */}
@@ -112,40 +37,48 @@ function StrategyCard({ strategy }: { strategy: Strategy }) {
           </div>
           <p className="text-xs text-muted-foreground">by {strategy.author.name}</p>
         </div>
-        
         <Badge variant="outline" className={`${riskColors[strategy.riskScore]} border text-xs capitalize`}>
           {strategy.riskScore} Risk
         </Badge>
       </div>
-      
+
       {/* Description */}
       <p className="text-sm text-muted-foreground line-clamp-2 mb-4 flex-1">
         {strategy.description}
       </p>
-      
-      {/* Metrics */}
-      <div className="grid grid-cols-3 gap-3 mb-4">
+
+      {/* Metrics - 4 columns */}
+      <div className="grid grid-cols-4 gap-2 mb-4">
         <div className="text-center p-2 rounded-lg bg-muted/50">
-          <p className="text-xs text-muted-foreground mb-1">Sharpe</p>
+          <p className="text-[10px] text-muted-foreground mb-0.5">Sharpe</p>
           <p className="font-data text-sm text-foreground">{strategy.sharpeRatio.toFixed(2)}</p>
         </div>
         <div className="text-center p-2 rounded-lg bg-muted/50">
-          <p className="text-xs text-muted-foreground mb-1">CAGR</p>
+          <p className="text-[10px] text-muted-foreground mb-0.5">CAGR</p>
           <p className="font-data text-sm text-profit">+{strategy.cagr}%</p>
         </div>
         <div className="text-center p-2 rounded-lg bg-muted/50">
-          <p className="text-xs text-muted-foreground mb-1">Users</p>
-          <p className="font-data text-sm text-foreground">{strategy.subscribers.toLocaleString()}</p>
+          <p className="text-[10px] text-muted-foreground mb-0.5">Win Rate</p>
+          <p className="font-data text-sm text-foreground">{strategy.winRate}%</p>
+        </div>
+        <div className="text-center p-2 rounded-lg bg-muted/50">
+          <p className="text-[10px] text-muted-foreground mb-0.5">Min. Capital</p>
+          <p className="font-data text-sm text-foreground">₹{(strategy.minCapital / 1000).toFixed(0)}k</p>
         </div>
       </div>
-      
+
+      {/* Subscribers count */}
+      <div className="flex items-center justify-between mb-4 text-xs text-muted-foreground">
+        <span>{strategy.subscribers.toLocaleString()} subscribers</span>
+      </div>
+
       {/* Actions */}
       <div className="flex gap-2">
-        <Button variant="outline" className="flex-1 text-sm">
-          View Details
+        <Button variant="outline" className="flex-1 text-sm" asChild>
+          <Link to={`/marketplace/strategy/${strategy.id}`}>View Details</Link>
         </Button>
         <Button className="flex-1 text-sm bg-primary hover:bg-primary/90">
-          Subscribe
+          {strategy.price ? `Subscribe - ₹${strategy.price.toLocaleString("en-IN")}/mo` : "Free Access"}
         </Button>
       </div>
     </div>
@@ -155,23 +88,26 @@ function StrategyCard({ strategy }: { strategy: Strategy }) {
 export default function Marketplace() {
   const [searchQuery, setSearchQuery] = useState("");
   const [riskFilter, setRiskFilter] = useState<string>("all");
-  
-  const filteredStrategies = mockStrategies.filter((strategy) => {
-    const matchesSearch = strategy.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         strategy.description.toLowerCase().includes(searchQuery.toLowerCase());
+
+  const filteredStrategies = strategies.filter((strategy) => {
+    const matchesSearch =
+      strategy.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      strategy.description.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesRisk = riskFilter === "all" || strategy.riskScore === riskFilter;
     return matchesSearch && matchesRisk;
   });
-  
+
   return (
     <MainLayout>
       <div className="p-4 md:p-6 max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-6">
           <h1 className="text-xl font-semibold text-foreground">Strategy Marketplace</h1>
-          <p className="text-sm text-muted-foreground">Discover and subscribe to proven trading strategies</p>
+          <p className="text-sm text-muted-foreground">
+            Discover and subscribe to proven trading strategies
+          </p>
         </div>
-        
+
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3 mb-6">
           <div className="relative flex-1">
@@ -183,7 +119,6 @@ export default function Marketplace() {
               className="pl-10 bg-card border-border"
             />
           </div>
-          
           <Select value={riskFilter} onValueChange={setRiskFilter}>
             <SelectTrigger className="w-full sm:w-[160px] bg-card border-border">
               <Filter className="w-4 h-4 mr-2" />
@@ -197,7 +132,7 @@ export default function Marketplace() {
             </SelectContent>
           </Select>
         </div>
-        
+
         {/* SEBI Verified Banner */}
         <div className="mb-6 p-4 rounded-lg bg-gradient-to-r from-gold/10 to-gold/5 border border-gold/20">
           <div className="flex items-center gap-3">
@@ -210,14 +145,14 @@ export default function Marketplace() {
             </div>
           </div>
         </div>
-        
+
         {/* Strategy Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredStrategies.map((strategy) => (
             <StrategyCard key={strategy.id} strategy={strategy} />
           ))}
         </div>
-        
+
         {filteredStrategies.length === 0 && (
           <div className="text-center py-12">
             <TrendingUp className="w-12 h-12 mx-auto mb-3 text-muted-foreground/30" />
