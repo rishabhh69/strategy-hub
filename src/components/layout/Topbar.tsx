@@ -1,4 +1,5 @@
 import { User, Crown, Bell, Menu, LogOut } from "lucide-react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,8 +18,25 @@ interface TopbarProps {
   onMenuClick?: () => void;
 }
 
+function isNSEOpen(): boolean {
+  const now       = new Date();
+  const utcMs     = now.getTime() + now.getTimezoneOffset() * 60_000;
+  const ist       = new Date(utcMs + 5.5 * 60 * 60_000);   // UTC+5:30
+  const day       = ist.getDay();                            // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false;
+  const mins = ist.getHours() * 60 + ist.getMinutes();
+  return mins >= 555 && mins < 930;                          // 9:15–15:30 IST
+}
+
 export function Topbar({ onMenuClick }: TopbarProps) {
-  const navigate = useNavigate();
+  const navigate   = useNavigate();
+  const [marketOpen, setMarketOpen] = useState(isNSEOpen());
+
+  // Re-check every minute so the indicator flips automatically
+  useEffect(() => {
+    const id = setInterval(() => setMarketOpen(isNSEOpen()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -44,8 +62,10 @@ export function Topbar({ onMenuClick }: TopbarProps) {
           </Button>
           
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-profit animate-pulse-glow" />
-            <span className="text-xs font-mono text-muted-foreground">MARKETS OPEN</span>
+            <div className={`w-2 h-2 rounded-full ${marketOpen ? "bg-profit animate-pulse-glow" : "bg-muted-foreground"}`} />
+            <span className={`text-xs font-mono ${marketOpen ? "text-profit" : "text-muted-foreground"}`}>
+              {marketOpen ? "MARKETS OPEN" : "MARKET CLOSED"}
+            </span>
           </div>
         </div>
         

@@ -9,6 +9,7 @@ Write-Host "OPENAI_API_KEY is set to: $env:OPENAI_API_KEY" -ForegroundColor Gree
 # Change to backend directory
 Set-Location $PSScriptRoot
 
-# Start the server
+# Start the server (Ctrl+C will stop it)
 Write-Host "`nStarting FastAPI server on http://127.0.0.1:8000..." -ForegroundColor Cyan
-python main.py
+Write-Host "Press Ctrl+C to stop the server.`n" -ForegroundColor Gray
+python -u main.py

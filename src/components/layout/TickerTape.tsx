@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { TrendingUp, TrendingDown } from "lucide-react";
 
 interface TickerItem {
@@ -7,15 +8,15 @@ interface TickerItem {
   changePercent: number;
 }
 
-const mockTickers: TickerItem[] = [
-  { symbol: "RELIANCE", price: 2847.65, change: 42.30, changePercent: 1.51 },
-  { symbol: "TATAMOTORS", price: 985.20, change: -12.45, changePercent: -1.25 },
-  { symbol: "HDFCBANK", price: 1672.40, change: 28.90, changePercent: 1.76 },
-  { symbol: "TCS", price: 3890.55, change: -35.20, changePercent: -0.90 },
-  { symbol: "INFY", price: 1542.80, change: 18.65, changePercent: 1.22 },
-  { symbol: "WIPRO", price: 478.35, change: -5.80, changePercent: -1.20 },
-  { symbol: "ICICIBANK", price: 1198.70, change: 22.45, changePercent: 1.91 },
-  { symbol: "SBIN", price: 825.40, change: 11.20, changePercent: 1.38 },
+const tickerSymbols = [
+  "RELIANCE",
+  "TATAMOTORS",
+  "HDFCBANK",
+  "TCS",
+  "INFY",
+  "WIPRO",
+  "ICICIBANK",
+  "SBIN",
 ];
 
 const TickerItem = ({ ticker }: { ticker: TickerItem }) => {
@@ -36,7 +37,65 @@ const TickerItem = ({ ticker }: { ticker: TickerItem }) => {
 };
 
 export function TickerTape() {
-  const duplicatedTickers = [...mockTickers, ...mockTickers];
+  const [tickers, setTickers] = useState<TickerItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchTickers = async () => {
+      try {
+        // Single batch request to avoid "too many requests"
+        const q = tickerSymbols.join(",");
+        const response = await fetch(`http://127.0.0.1:8000/quotes?tickers=${encodeURIComponent(q)}`);
+        if (!response.ok) {
+          if (response.status === 429 || response.status === 503) {
+            // Rate limited - will retry on next interval
+          }
+          setIsLoading(false);
+          return;
+        }
+        const data = await response.json();
+        const validTickers: TickerItem[] = (Array.isArray(data) ? data : []).map(
+          (row: { ticker: string; price: number; change_percent: number }) => ({
+            symbol: row.ticker,
+            price: row.price,
+            change: (row.price * row.change_percent) / 100,
+            changePercent: row.change_percent,
+          })
+        );
+        setTickers(validTickers);
+      } catch (error) {
+        console.error("Failed to fetch tickers:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    // Fetch immediately
+    fetchTickers();
+
+    // Poll every 30 seconds to avoid 429 rate limits
+    const interval = setInterval(fetchTickers, 30000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Use empty array or show loading state if no data
+  if (isLoading && tickers.length === 0) {
+    return (
+      <div className="bg-sidebar border-b border-sidebar-border overflow-hidden">
+        <div className="flex items-center justify-center py-2">
+          <span className="text-xs text-muted-foreground">Loading market data...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (tickers.length === 0) {
+    return null;
+  }
+
+  // Duplicate tickers for seamless scrolling
+  const duplicatedTickers = [...tickers, ...tickers];
   
   return (
     <div className="bg-sidebar border-b border-sidebar-border overflow-hidden">

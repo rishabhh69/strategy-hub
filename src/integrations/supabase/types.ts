@@ -14,6 +14,90 @@ export type Database = {
   }
   public: {
     Tables: {
+      paper_accounts: {
+        Row: {
+          id:         string
+          user_id:    string
+          balance:    number
+          created_at: string
+        }
+        Insert: {
+          id?:         string
+          user_id:     string
+          balance?:    number
+          created_at?: string
+        }
+        Update: {
+          id?:         string
+          user_id?:    string
+          balance?:    number
+          created_at?: string
+        }
+        Relationships: []
+      }
+      paper_positions: {
+        Row: {
+          id:            string
+          user_id:       string
+          symbol:        string
+          quantity:      number
+          average_price: number
+          side:          string
+          created_at:    string
+        }
+        Insert: {
+          id?:            string
+          user_id:        string
+          symbol:         string
+          quantity:       number
+          average_price:  number
+          side:           string
+          created_at?:    string
+        }
+        Update: {
+          id?:            string
+          user_id?:       string
+          symbol?:        string
+          quantity?:      number
+          average_price?: number
+          side?:          string
+          created_at?:    string
+        }
+        Relationships: []
+      }
+      paper_orders_log: {
+        Row: {
+          id:          string
+          user_id:     string
+          strategy_id: string | null
+          symbol:      string
+          action:      string
+          quantity:    number
+          price:       number
+          timestamp:   string
+        }
+        Insert: {
+          id?:          string
+          user_id:      string
+          strategy_id?: string | null
+          symbol:       string
+          action:       string
+          quantity:     number
+          price:        number
+          timestamp?:   string
+        }
+        Update: {
+          id?:          string
+          user_id?:     string
+          strategy_id?: string | null
+          symbol?:      string
+          action?:      string
+          quantity?:    number
+          price?:       number
+          timestamp?:   string
+        }
+        Relationships: []
+      }
       community_messages: {
         Row: {
           channel: string
