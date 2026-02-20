@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import LandingPage from "./pages/LandingPage";
 import StrategyStudio from "./pages/StrategyStudio";
 import Marketplace from "./pages/Marketplace";
+import StrategyDetail from "./pages/StrategyDetail";
 import Community from "./pages/Community";
 import Settings from "./pages/Settings";
 import Profile from "./pages/Profile";
@@ -25,6 +26,7 @@ const App = () => (
           <Route path="/" element={<LandingPage />} />
           <Route path="/strategy-studio" element={<StrategyStudio />} />
           <Route path="/marketplace" element={<Marketplace />} />
+          <Route path="/marketplace/strategy/:id" element={<StrategyDetail />} />
           <Route path="/community" element={<Community />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/profile" element={<Profile />} />
