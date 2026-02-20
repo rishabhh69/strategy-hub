@@ -88,13 +88,20 @@ function StrategyCard({ strategy }: { strategy: StrategyDetail }) {
 export default function Marketplace() {
   const [searchQuery, setSearchQuery] = useState("");
   const [riskFilter, setRiskFilter] = useState<string>("all");
+  const [costFilter, setCostFilter] = useState<string>("all");
 
   const filteredStrategies = strategies.filter((strategy) => {
     const matchesSearch =
       strategy.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       strategy.description.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesRisk = riskFilter === "all" || strategy.riskScore === riskFilter;
-    return matchesSearch && matchesRisk;
+    const matchesCost =
+      costFilter === "all" ||
+      (costFilter === "free" && strategy.price === null) ||
+      (costFilter === "under1000" && strategy.price !== null && strategy.price < 1000) ||
+      (costFilter === "1000to2500" && strategy.price !== null && strategy.price >= 1000 && strategy.price <= 2500) ||
+      (costFilter === "above2500" && strategy.price !== null && strategy.price > 2500);
+    return matchesSearch && matchesRisk && matchesCost;
   });
 
   return (
@@ -129,6 +136,18 @@ export default function Marketplace() {
               <SelectItem value="low">Low Risk</SelectItem>
               <SelectItem value="medium">Medium Risk</SelectItem>
               <SelectItem value="high">High Risk</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={costFilter} onValueChange={setCostFilter}>
+            <SelectTrigger className="w-full sm:w-[160px] bg-card border-border">
+              <SelectValue placeholder="Price Range" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Prices</SelectItem>
+              <SelectItem value="free">Free</SelectItem>
+              <SelectItem value="under1000">Under ₹1,000</SelectItem>
+              <SelectItem value="1000to2500">₹1,000 – ₹2,500</SelectItem>
+              <SelectItem value="above2500">Above ₹2,500</SelectItem>
             </SelectContent>
           </Select>
         </div>
