@@ -19,7 +19,7 @@ import { toast } from "sonner";
 
 const tickers = [
   { value: "RELIANCE", label: "RELIANCE.NS" },
-  { value: "TATAMOTORS", label: "TATAMOTORS.NS" },
+  { value: "BAJFINANCE", label: "BAJFINANCE.NS" },
   { value: "HDFCBANK", label: "HDFCBANK.NS" },
   { value: "TCS", label: "TCS.NS" },
 ];

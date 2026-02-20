@@ -10,7 +10,7 @@ interface TickerItem {
 
 const tickerSymbols = [
   "RELIANCE",
-  "TATAMOTORS",
+  "BAJFINANCE",
   "HDFCBANK",
   "TCS",
   "INFY",

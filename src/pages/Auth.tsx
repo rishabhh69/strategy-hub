@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { Eye, EyeOff, TrendingUp, Mail, Lock, User } from "lucide-react";
+import { Eye, EyeOff, Mail, Lock, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -62,9 +62,7 @@ export default function Auth() {
         
         {/* Logo */}
         <div className="relative z-10 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-            <TrendingUp className="w-6 h-6 text-primary-foreground" />
-          </div>
+          <img src="/logo.png" alt="Tradeky" className="w-10 h-10 rounded-xl object-contain" />
           <span className="text-2xl font-semibold text-foreground">Tradeky</span>
         </div>
         
@@ -107,9 +105,7 @@ export default function Auth() {
         <div className="w-full max-w-md space-y-8">
           {/* Mobile Logo */}
           <div className="lg:hidden flex items-center justify-center gap-3 mb-8">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-              <TrendingUp className="w-6 h-6 text-primary-foreground" />
-            </div>
+            <img src="/logo.png" alt="Tradeky" className="w-10 h-10 rounded-xl object-contain" />
             <span className="text-2xl font-semibold text-foreground">Tradeky</span>
           </div>
           

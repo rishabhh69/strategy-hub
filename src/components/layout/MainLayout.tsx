@@ -13,8 +13,8 @@ export function MainLayout({ children }: MainLayoutProps) {
   
   return (
     <div className="flex min-h-screen w-full bg-background">
-      {/* Desktop Sidebar */}
-      <div className="hidden lg:block">
+      {/* Desktop Sidebar — sticky so it never scrolls away */}
+      <div className="hidden lg:block sticky top-0 h-screen shrink-0 self-start">
         <AppSidebar 
           collapsed={sidebarCollapsed} 
           onCollapse={() => setSidebarCollapsed(!sidebarCollapsed)} 

@@ -8,7 +8,7 @@ import {
 import {
   TrendingUp, TrendingDown, Activity, AlertTriangle, Square,
   Radio, ArrowUpRight, ArrowDownRight, Clock, Zap, RefreshCw,
-  Bot, Rocket, Plus, X, RotateCcw, IndianRupee,
+  Bot, Rocket, Plus, X, RotateCcw, IndianRupee, ListOrdered, Ban,
 } from "lucide-react";
 import { MainLayout }         from "@/components/layout/MainLayout";
 import { TradingViewChart }   from "@/components/charts/TradingViewChart";
@@ -26,7 +26,8 @@ const TICKERS = [
   { value: "HDFCBANK",   label: "HDFC BANK",    group: "Stock"  },
   { value: "TCS",        label: "TCS",          group: "Stock"  },
   { value: "INFY",       label: "INFOSYS",      group: "Stock"  },
-  { value: "TATAMOTORS", label: "TATA MOTORS",  group: "Stock"  },
+  { value: "BAJFINANCE", label: "BAJAJ FINANCE", group: "Stock"  },
+  { value: "TATAMOTORS", label: "TATA MOTORS",   group: "Stock"  },
   { value: "SBIN",       label: "SBI",          group: "Stock"  },
   { value: "ICICIBANK",  label: "ICICI BANK",   group: "Stock"  },
   { value: "BHARTIARTL", label: "AIRTEL",       group: "Stock"  },
@@ -57,8 +58,19 @@ interface Strategy {
   logic_text: string;
 }
 
+interface PendingOrder {
+  id:          string;
+  symbol:      string;
+  quantity:    number;
+  side:        "buy" | "sell";
+  limit_price: number;
+  status:      "pending" | "filled" | "cancelled";
+  created_at:  string;
+}
+
 interface DeployedBot {
-  id:            string;
+  id:            string;   // strategy id
+  bot_id:        string;   // backend task id (returned by /deploy-bot)
   strategyTitle: string;
   ticker:        string;
   label:         string;
@@ -175,6 +187,16 @@ export default function LiveTerminal() {
   const [tradeTicker,  setTradeTicker]  = useState("NIFTY");
   const [tradeQty,     setTradeQty]     = useState(1);
   const [tradeLoading, setTradeLoading] = useState<"buy" | "sell" | null>(null);
+  const [orderType,    setOrderType]    = useState<"market" | "limit">("market");
+  const [limitPrice,   setLimitPrice]   = useState<string>("");
+
+  // Pending limit orders
+  const [pendingOrders,   setPendingOrders]   = useState<PendingOrder[]>([]);
+  const [cancellingId,    setCancellingId]    = useState<string | null>(null);
+  const [squaringOff,     setSquaringOff]     = useState(false);
+
+  // Centre panel tab
+  const [centreTab, setCentreTab] = useState<"positions" | "pending">("positions");
 
   // Order log
   const [orderLog, setOrderLog] = useState<OrderLogEntry[]>([]);
@@ -216,13 +238,31 @@ export default function LiveTerminal() {
       const res = await fetch(`${API_BASE}/api/paper-trading/account?user_id=${uid}`);
       if (res.ok) {
         const d = await res.json();
-        setPaperBalance(d.balance ?? STARTING_CAPITAL);
-        setDayPnl(d.day_pnl ?? 0);
-        setOpenPositionsCount(d.open_positions ?? 0);
-        if (Array.isArray(d.positions)) setPositions(d.positions as Position[]);
+        // Only update balance/positions if backend has meaningful data.
+        // If backend was freshly restarted and restore hasn't completed yet,
+        // d.balance may equal STARTING_CAPITAL with 0 positions — don't clobber
+        // a non-empty localStorage-loaded state in that case.
+        const backendHasData = d.balance !== STARTING_CAPITAL ||
+          (Array.isArray(d.positions) && d.positions.length > 0);
+        if (backendHasData) {
+          setPaperBalance(d.balance ?? STARTING_CAPITAL);
+          setDayPnl(d.day_pnl ?? 0);
+          setOpenPositionsCount(d.open_positions ?? 0);
+          if (Array.isArray(d.positions)) setPositions(d.positions as Position[]);
+        } else {
+          // Backend returned blank slate — only update the counts, keep positions
+          setOpenPositionsCount(d.open_positions ?? 0);
+        }
       }
     } catch {}
     finally { setAccountLoading(false); }
+  }, []);
+
+  const fetchPendingOrders = useCallback(async (uid: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/paper-trading/pending-orders?user_id=${uid}`);
+      if (res.ok) setPendingOrders(await res.json());
+    } catch {}
   }, []);
 
   const fetchLogs = useCallback(async (uid: string) => {
@@ -242,24 +282,58 @@ export default function LiveTerminal() {
     } catch {}
   }, []);
 
-  // ── 5. Restore from localStorage + re-seed backend ────────────────────────
+  // ── 5. Init: load localStorage → await restore → fetch backend (sequential) ──
   useEffect(() => {
     if (!userId) return;
-    const saved = loadPaperState(userId);
-    if (saved) {
-      setPaperBalance(saved.balance);
-      setDayPnl(saved.dayPnl ?? 0);
-      setPositions(saved.positions ?? []);
-      if (saved.orderLog?.length) setOrderLog(saved.orderLog);
-      // Re-seed backend so next trade uses the correct balance
-      fetch(`${API_BASE}/api/paper-trading/restore`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId, balance: saved.balance, positions: saved.positions ?? [], day_pnl: saved.dayPnl ?? 0 }),
-      }).catch(() => {});
-    }
-  }, [userId]);
+    let cancelled = false;
 
-  // ── 6. Persist state to localStorage ────────────────────────────────────────
+    async function init() {
+      // Step A — show localStorage data immediately so UI is never blank
+      const saved = loadPaperState(userId);
+      if (saved) {
+        setPaperBalance(saved.balance);
+        setDayPnl(saved.dayPnl ?? 0);
+        setPositions(saved.positions ?? []);
+        if (saved.orderLog?.length) setOrderLog(saved.orderLog);
+
+        // Step B — re-seed backend and WAIT before fetching so backend
+        //           doesn't return empty state that overwrites localStorage
+        try {
+          await fetch(`${API_BASE}/api/paper-trading/restore`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id:   userId,
+              balance:   saved.balance,
+              positions: saved.positions ?? [],
+              day_pnl:   saved.dayPnl ?? 0,
+            }),
+          });
+        } catch {}
+      }
+
+      if (cancelled) return;
+
+      // Step C — now fetch fresh data (backend is properly seeded)
+      await fetchAccount(userId);
+      await fetchLogs(userId);
+      await fetchPendingOrders(userId);
+    }
+
+    init();
+
+    // ── 7. Polling every 15 s (starts after init) ──
+    const id = setInterval(() => {
+      if (!cancelled) {
+        fetchAccount(userId);
+        fetchLogs(userId);
+        fetchPendingOrders(userId);
+      }
+    }, 15_000);
+
+    return () => { cancelled = true; clearInterval(id); };
+  }, [userId, fetchAccount, fetchLogs, fetchPendingOrders]);
+
+  // ── 6. Persist state to localStorage whenever key state changes ─────────────
   useEffect(() => {
     if (!userId || accountLoading) return;
     savePaperState(userId, {
@@ -268,15 +342,6 @@ export default function LiveTerminal() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paperBalance, dayPnl, positions, orderLog]);
-
-  // ── 7. Poll account + logs every 15 s ────────────────────────────────────────
-  useEffect(() => {
-    if (!userId) return;
-    fetchAccount(userId);
-    fetchLogs(userId);
-    const id = setInterval(() => { fetchAccount(userId); fetchLogs(userId); }, 15_000);
-    return () => clearInterval(id);
-  }, [userId, fetchAccount, fetchLogs]);
 
   // ── 8. Backend health ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -342,11 +407,25 @@ export default function LiveTerminal() {
       toast.error("Backend offline. Start: cd backend && .\\start_server.bat");
       return;
     }
+    if (orderType === "limit" && (!limitPrice || Number(limitPrice) <= 0)) {
+      toast.error("Enter a valid limit price before placing a limit order.");
+      return;
+    }
     setTradeLoading(side);
     try {
+      const payload: Record<string, unknown> = {
+        user_id:     userId,
+        symbol:      tradeTicker,
+        quantity:    tradeQty,
+        side,
+        order_type:  orderType,
+        strategy_id: selectedBot?.id ?? null,
+      };
+      if (orderType === "limit") payload.limit_price = Number(limitPrice);
+
       const res = await fetch(`${API_BASE}/api/paper-trading/execute`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId, symbol: tradeTicker, quantity: tradeQty, side, strategy_id: selectedBot?.id ?? null }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -354,19 +433,27 @@ export default function LiveTerminal() {
       }
       const data = await res.json();
       const now  = new Date().toLocaleTimeString("en-IN", { hour12: false });
-      const msg  = data.message ?? `${side.toUpperCase()} ${tradeQty} ${tradeTicker} @ ₹${fmt(data.executed_price)}`;
 
-      setOrderLog(prev => [{ time: now, type: "trade", action: side, message: msg, pnl: data.realized_pnl }, ...prev]);
-      if (data.new_balance  !== undefined) setPaperBalance(data.new_balance);
-      if (data.new_day_pnl  !== undefined) setDayPnl(data.new_day_pnl);
-
-      fetchLogs(userId);
-      fetchAccount(userId);
-
-      const pnlNote = side === "sell" && data.realized_pnl !== undefined
-        ? `  |  P&L ${data.realized_pnl >= 0 ? "+" : ""}₹${fmt(data.realized_pnl)}`
-        : "";
-      toast.success(`${side.toUpperCase()} filled — ${tradeQty} ${tradeTicker} @ ₹${fmt(data.executed_price)}${pnlNote}`);
+      if (data.status === "pending") {
+        // Limit order queued
+        const msg = data.message ?? `Limit order queued: ${side.toUpperCase()} ${tradeQty} ${tradeTicker} @ ₹${fmt(Number(limitPrice))}`;
+        setOrderLog(prev => [{ time: now, type: "info", message: msg }, ...prev]);
+        fetchPendingOrders(userId);
+        setCentreTab("pending");
+        toast.info(msg);
+      } else {
+        // Market order filled
+        const msg = data.message ?? `${side.toUpperCase()} ${tradeQty} ${tradeTicker} @ ₹${fmt(data.executed_price)}`;
+        setOrderLog(prev => [{ time: now, type: "trade", action: side, message: msg, pnl: data.realized_pnl }, ...prev]);
+        if (data.new_balance !== undefined) setPaperBalance(data.new_balance);
+        if (data.new_day_pnl !== undefined) setDayPnl(data.new_day_pnl);
+        fetchLogs(userId);
+        fetchAccount(userId);
+        const pnlNote = side === "sell" && data.realized_pnl !== undefined
+          ? `  |  P&L ${data.realized_pnl >= 0 ? "+" : ""}₹${fmt(data.realized_pnl)}`
+          : "";
+        toast.success(`${side.toUpperCase()} filled — ${tradeQty} ${tradeTicker} @ ₹${fmt(data.executed_price)}${pnlNote}`);
+      }
     } catch (err: any) {
       const msg = err.message ?? "Trade failed";
       const now = new Date().toLocaleTimeString("en-IN", { hour12: false });
@@ -404,21 +491,101 @@ export default function LiveTerminal() {
     finally { setTradeLoading(null); }
   };
 
+  // ── Cancel pending limit order ────────────────────────────────────────────────
+  const cancelOrder = async (orderId: string) => {
+    if (!userId) return;
+    setCancellingId(orderId);
+    try {
+      const res = await fetch(`${API_BASE}/api/paper-trading/cancel-order`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId, order_id: orderId }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(e.detail); }
+      setPendingOrders(prev => prev.filter(o => o.id !== orderId));
+      const now = new Date().toLocaleTimeString("en-IN", { hour12: false });
+      setOrderLog(prev => [{ time: now, type: "system", message: `Limit order cancelled: ${orderId.slice(0, 8)}…` }, ...prev]);
+      toast.warning("Limit order cancelled.");
+    } catch (err: any) { toast.error(err.message ?? "Cancel failed"); }
+    finally { setCancellingId(null); }
+  };
+
+  // ── Square off all positions ──────────────────────────────────────────────────
+  const squareOffAll = async () => {
+    if (!userId || positions.length === 0) return;
+    if (!confirm(`Square off all ${positions.length} open position(s)? This cannot be undone.`)) return;
+    setSquaringOff(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/paper-trading/square-off-all`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(e.detail); }
+      const data = await res.json();
+      if (data.new_balance !== undefined) setPaperBalance(data.new_balance);
+      if (data.new_day_pnl !== undefined) setDayPnl(data.new_day_pnl);
+      fetchAccount(userId);
+      fetchLogs(userId);
+      const sign = (data.total_pnl ?? 0) >= 0 ? "+" : "";
+      toast.success(`Square-off complete. Total P&L: ${sign}₹${fmt(data.total_pnl ?? 0)}`);
+    } catch (err: any) { toast.error(err.message ?? "Square-off failed"); }
+    finally { setSquaringOff(false); }
+  };
+
   // ── Deploy Bot ────────────────────────────────────────────────────────────────
-  const deployBot = () => {
+  const deployBot = async () => {
     const strat = strategies.find(s => s.id === deployStratId);
-    if (!strat) return;
+    if (!strat || !userId) return;
+    if (backendOnline === false) { toast.error("Backend offline."); return; }
     setDeploying(true);
-    const label  = TICKERS.find(t => t.value === deployTicker)?.label ?? deployTicker;
-    const bot: DeployedBot = { id: strat.id, strategyTitle: strat.title, ticker: deployTicker, label, status: "scanning", pnl: 0, qty: deployQty, deployedAt: new Date().toISOString() };
-    const updated = [bot, ...deployedBots.filter(b => b.id !== bot.id)];
-    setDeployedBots(updated);
-    localStorage.setItem("tradeky_bots", JSON.stringify(updated));
-    setSelectedBot(bot); setChartTicker(bot.ticker);
-    const now = new Date().toLocaleTimeString("en-IN", { hour12: false });
-    setOrderLog(prev => [{ time: now, type: "system", message: `🤖 Bot deployed: "${strat.title}" on ${label}  qty ${deployQty}` }, ...prev]);
-    toast.success(`Bot deployed: ${strat.title} on ${label}`);
-    setDeploying(false);
+    try {
+      // 1. Register on backend — backend fetches code from Supabase and launches worker
+      const res = await fetch(`${API_BASE}/api/paper-trading/deploy-bot`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id:     userId,
+          strategy_id: strat.id,
+          symbol:      deployTicker,
+          quantity:    deployQty,
+          title:       strat.title,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const bot_id = data.bot_id as string;
+
+      // 2. Update local UI state with the backend bot_id
+      const label = TICKERS.find(t => t.value === deployTicker)?.label ?? deployTicker;
+      const bot: DeployedBot = {
+        id:            strat.id,
+        bot_id,
+        strategyTitle: strat.title,
+        ticker:        deployTicker,
+        label,
+        status:        "scanning",
+        pnl:           0,
+        qty:           deployQty,
+        deployedAt:    new Date().toISOString(),
+      };
+      const updated = [bot, ...deployedBots.filter(b => b.bot_id !== bot_id)];
+      setDeployedBots(updated);
+      localStorage.setItem("tradeky_bots", JSON.stringify(updated));
+      setSelectedBot(bot);
+      setChartTicker(bot.ticker);
+
+      const now = new Date().toLocaleTimeString("en-IN", { hour12: false });
+      setOrderLog(prev => [{
+        time: now, type: "system",
+        message: `Bot deployed: "${strat.title}" on ${label}  qty ${deployQty}  (${bot_id.slice(0, 16)}…)`,
+      }, ...prev]);
+      toast.success(`Bot "${strat.title}" is live on ${label}. Checking every 60 s.`);
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to deploy bot");
+    } finally {
+      setDeploying(false);
+    }
   };
 
   // ── Reset Account ─────────────────────────────────────────────────────────────
@@ -581,6 +748,20 @@ export default function LiveTerminal() {
                   </SelectContent>
                 </Select>
 
+                {/* Market / Limit toggle */}
+                <div className="flex items-center gap-1 bg-muted/40 rounded-md p-0.5">
+                  <button
+                    onClick={() => setOrderType("market")}
+                    className={`flex-1 text-[11px] font-semibold py-1 rounded transition-colors ${orderType === "market" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                    Market
+                  </button>
+                  <button
+                    onClick={() => setOrderType("limit")}
+                    className={`flex-1 text-[11px] font-semibold py-1 rounded transition-colors ${orderType === "limit" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                    Limit
+                  </button>
+                </div>
+
                 {/* Qty */}
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground w-6">Qty</span>
@@ -589,11 +770,24 @@ export default function LiveTerminal() {
                     className="flex-1 bg-background border border-border rounded-md px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary" />
                 </div>
 
+                {/* Limit price (only when limit selected) */}
+                {orderType === "limit" && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground w-6">₹</span>
+                    <input
+                      type="number" min={0.01} step={0.05}
+                      value={limitPrice}
+                      onChange={e => setLimitPrice(e.target.value)}
+                      placeholder="Limit price"
+                      className="flex-1 bg-background border border-primary/50 rounded-md px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary" />
+                  </div>
+                )}
+
                 {/* Est. value */}
                 {livePrice && (
                   <p className="text-[10px] text-muted-foreground">
-                    Est. value: ₹{fmt(livePrice * tradeQty)}
-                    {livePrice * tradeQty > paperBalance && (
+                    Est. value: ₹{fmt((orderType === "limit" && Number(limitPrice) > 0 ? Number(limitPrice) : livePrice) * tradeQty)}
+                    {(orderType === "limit" && Number(limitPrice) > 0 ? Number(limitPrice) : livePrice) * tradeQty > paperBalance && (
                       <span className="text-loss ml-1">(exceeds cash)</span>
                     )}
                   </p>
@@ -616,7 +810,7 @@ export default function LiveTerminal() {
                 </div>
 
                 <p className="text-[10px] text-muted-foreground">
-                  Market order · Cash: ₹{fmt(paperBalance)}
+                  {orderType === "market" ? "Market order" : "Limit order — queued until filled"} · Cash: ₹{fmt(paperBalance)}
                 </p>
               </CardContent>
             </Card>
@@ -667,7 +861,17 @@ export default function LiveTerminal() {
                 <div className="flex items-center gap-1.5">
                   <Badge variant="outline" className="font-data text-xs">{deployedBots.length}</Badge>
                   {deployedBots.length > 0 && (
-                    <button onClick={() => { setDeployedBots([]); setSelectedBot(null); localStorage.removeItem("tradeky_bots"); toast.warning("All bots stopped."); }}
+                    <button
+                      onClick={async () => {
+                        // Cancel all backend workers first
+                        try {
+                          await fetch(`${API_BASE}/api/paper-trading/stop-all-bots`, { method: "POST" });
+                        } catch {}
+                        setDeployedBots([]);
+                        setSelectedBot(null);
+                        localStorage.removeItem("tradeky_bots");
+                        toast.warning("All bots stopped.");
+                      }}
                       className="text-loss/60 hover:text-loss transition-colors text-[10px]">
                       Stop all
                     </button>
@@ -693,8 +897,27 @@ export default function LiveTerminal() {
                           </div>
                           <div className="flex items-center gap-1">
                             <StatusBadge status={bot.status} />
-                            <button onClick={e => { e.stopPropagation(); const u = deployedBots.filter(b => b.id !== bot.id); setDeployedBots(u); localStorage.setItem("tradeky_bots", JSON.stringify(u)); if (selectedBot?.id === bot.id) setSelectedBot(null); }}
-                              className="text-muted-foreground hover:text-loss ml-1"><X className="w-3 h-3" /></button>
+                            <button
+                              onClick={async e => {
+                                e.stopPropagation();
+                                // Cancel backend worker
+                                if (bot.bot_id) {
+                                  try {
+                                    await fetch(`${API_BASE}/api/paper-trading/stop-bot`, {
+                                      method: "POST", headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ bot_id: bot.bot_id }),
+                                    });
+                                  } catch {}
+                                }
+                                const u = deployedBots.filter(b => b.bot_id !== bot.bot_id);
+                                setDeployedBots(u);
+                                localStorage.setItem("tradeky_bots", JSON.stringify(u));
+                                if (selectedBot?.bot_id === bot.bot_id) setSelectedBot(null);
+                                toast.warning(`Bot "${bot.strategyTitle}" stopped.`);
+                              }}
+                              className="text-muted-foreground hover:text-loss ml-1">
+                              <X className="w-3 h-3" />
+                            </button>
                           </div>
                         </div>
                         <div className="flex items-center justify-between text-xs">
@@ -743,69 +966,150 @@ export default function LiveTerminal() {
               </CardContent>
             </Card>
 
-            {/* Open Positions Table */}
+            {/* Positions / Pending Orders — tabbed */}
             <Card className="flex-1 flex flex-col min-h-0 overflow-hidden">
-              <CardHeader className="py-2.5 px-4 border-b border-border shrink-0">
-                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Open Positions
-                  {positions.length > 0 && <Badge variant="outline" className="ml-2 font-data">{positions.length}</Badge>}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0 flex-1 overflow-auto">
-                {positions.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-center gap-1.5 py-8">
-                    <Activity className="w-6 h-6 text-muted-foreground/20" />
-                    <p className="text-xs text-muted-foreground">No open positions</p>
+              {/* Tab header */}
+              <CardHeader className="py-0 px-0 border-b border-border shrink-0">
+                <div className="flex items-center justify-between px-2">
+                  <div className="flex">
+                    <button
+                      onClick={() => setCentreTab("positions")}
+                      className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider border-b-2 transition-colors ${centreTab === "positions" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+                      Open Positions
+                      {positions.length > 0 && <Badge variant="outline" className="ml-1.5 font-data text-[9px] py-0">{positions.length}</Badge>}
+                    </button>
+                    <button
+                      onClick={() => setCentreTab("pending")}
+                      className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider border-b-2 transition-colors ${centreTab === "pending" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+                      Pending Orders
+                      {pendingOrders.length > 0 && <Badge variant="outline" className="ml-1.5 font-data text-[9px] py-0">{pendingOrders.length}</Badge>}
+                    </button>
                   </div>
-                ) : (
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-border bg-muted/30">
-                        <th className="text-left px-3 py-2 text-muted-foreground font-medium">Symbol</th>
-                        <th className="text-right px-3 py-2 text-muted-foreground font-medium">Qty</th>
-                        <th className="text-right px-3 py-2 text-muted-foreground font-medium">Avg Cost</th>
-                        <th className="text-right px-3 py-2 text-muted-foreground font-medium">LTP</th>
-                        <th className="text-right px-3 py-2 text-muted-foreground font-medium">P&amp;L</th>
-                        <th className="text-right px-3 py-2 text-muted-foreground font-medium">P&amp;L %</th>
-                        <th className="px-2 py-2"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {positions.map(pos => {
-                        const ltp  = positionPrices[pos.symbol] ?? pos.average_price;
-                        const pnl  = (ltp - pos.average_price) * pos.quantity * (pos.side === "buy" ? 1 : -1);
-                        const pnlP = ((ltp - pos.average_price) / pos.average_price) * 100 * (pos.side === "buy" ? 1 : -1);
-                        return (
-                          <tr key={pos.id} className="border-b border-border/50 hover:bg-muted/20 transition-colors">
-                            <td className="px-3 py-2">
-                              <div className="flex items-center gap-1.5">
-                                <span className={`text-[9px] font-bold px-1 rounded ${pos.side === "buy" ? "bg-profit/20 text-profit" : "bg-loss/20 text-loss"}`}>
-                                  {pos.side.toUpperCase()}
-                                </span>
-                                <span className="font-medium text-foreground">{pos.symbol}</span>
-                              </div>
+
+                  {/* Square Off All — only on positions tab */}
+                  {centreTab === "positions" && positions.length > 0 && (
+                    <button
+                      onClick={squareOffAll}
+                      disabled={squaringOff}
+                      className="flex items-center gap-1 text-[10px] font-semibold px-2.5 py-1 rounded border border-loss/60 text-loss hover:bg-loss/10 transition-colors disabled:opacity-50 mr-1">
+                      {squaringOff
+                        ? <RefreshCw className="w-3 h-3 animate-spin" />
+                        : <Ban className="w-3 h-3" />}
+                      Square Off All
+                    </button>
+                  )}
+                </div>
+              </CardHeader>
+
+              <CardContent className="p-0 flex-1 overflow-auto">
+                {/* ── Open Positions tab ── */}
+                {centreTab === "positions" && (
+                  positions.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-center gap-1.5 py-8">
+                      <Activity className="w-6 h-6 text-muted-foreground/20" />
+                      <p className="text-xs text-muted-foreground">No open positions</p>
+                    </div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/30">
+                          <th className="text-left px-3 py-2 text-muted-foreground font-medium">Symbol</th>
+                          <th className="text-right px-3 py-2 text-muted-foreground font-medium">Qty</th>
+                          <th className="text-right px-3 py-2 text-muted-foreground font-medium">Avg Cost</th>
+                          <th className="text-right px-3 py-2 text-muted-foreground font-medium">LTP</th>
+                          <th className="text-right px-3 py-2 text-muted-foreground font-medium">P&amp;L</th>
+                          <th className="text-right px-3 py-2 text-muted-foreground font-medium">P&amp;L %</th>
+                          <th className="px-2 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {positions.map(pos => {
+                          const ltp  = positionPrices[pos.symbol] ?? pos.average_price;
+                          const pnl  = (ltp - pos.average_price) * pos.quantity * (pos.side === "buy" ? 1 : -1);
+                          const pnlP = ((ltp - pos.average_price) / pos.average_price) * 100 * (pos.side === "buy" ? 1 : -1);
+                          return (
+                            <tr key={pos.id} className="border-b border-border/50 hover:bg-muted/20 transition-colors">
+                              <td className="px-3 py-2">
+                                <div className="flex items-center gap-1.5">
+                                  <span className={`text-[9px] font-bold px-1 rounded ${pos.side === "buy" ? "bg-profit/20 text-profit" : "bg-loss/20 text-loss"}`}>
+                                    {pos.side.toUpperCase()}
+                                  </span>
+                                  <span className="font-medium text-foreground">{pos.symbol}</span>
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 text-right font-data">{pos.quantity}</td>
+                              <td className="px-3 py-2 text-right font-data text-muted-foreground">₹{fmt(pos.average_price)}</td>
+                              <td className="px-3 py-2 text-right font-data font-medium">₹{fmt(ltp)}</td>
+                              <td className={`px-3 py-2 text-right font-data font-semibold ${pnl >= 0 ? "text-profit" : "text-loss"}`}>
+                                {pnl >= 0 ? "+" : "−"}₹{fmt(Math.abs(pnl))}
+                              </td>
+                              <td className={`px-3 py-2 text-right font-data ${pnlP >= 0 ? "text-profit" : "text-loss"}`}>
+                                {fmtP(pnlP)}
+                              </td>
+                              <td className="px-2 py-2">
+                                <button onClick={() => closePosition(pos)}
+                                  disabled={tradeLoading !== null}
+                                  className="text-[10px] px-2 py-0.5 rounded border border-loss/40 text-loss hover:bg-loss/10 transition-colors disabled:opacity-40">
+                                  Close
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )
+                )}
+
+                {/* ── Pending Orders tab ── */}
+                {centreTab === "pending" && (
+                  pendingOrders.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-center gap-1.5 py-8">
+                      <ListOrdered className="w-6 h-6 text-muted-foreground/20" />
+                      <p className="text-xs text-muted-foreground">No pending limit orders</p>
+                    </div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/30">
+                          <th className="text-left px-3 py-2 text-muted-foreground font-medium">Symbol</th>
+                          <th className="text-right px-3 py-2 text-muted-foreground font-medium">Side</th>
+                          <th className="text-right px-3 py-2 text-muted-foreground font-medium">Qty</th>
+                          <th className="text-right px-3 py-2 text-muted-foreground font-medium">Limit ₹</th>
+                          <th className="text-right px-3 py-2 text-muted-foreground font-medium">Placed</th>
+                          <th className="px-2 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pendingOrders.map(ord => (
+                          <tr key={ord.id} className="border-b border-border/50 hover:bg-muted/20 transition-colors">
+                            <td className="px-3 py-2 font-medium text-foreground">{ord.symbol}</td>
+                            <td className="px-3 py-2 text-right">
+                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${ord.side === "buy" ? "bg-profit/20 text-profit" : "bg-loss/20 text-loss"}`}>
+                                {ord.side.toUpperCase()}
+                              </span>
                             </td>
-                            <td className="px-3 py-2 text-right font-data">{pos.quantity}</td>
-                            <td className="px-3 py-2 text-right font-data text-muted-foreground">₹{fmt(pos.average_price)}</td>
-                            <td className="px-3 py-2 text-right font-data font-medium">₹{fmt(ltp)}</td>
-                            <td className={`px-3 py-2 text-right font-data font-semibold ${pnl >= 0 ? "text-profit" : "text-loss"}`}>
-                              {pnl >= 0 ? "+" : "−"}₹{fmt(Math.abs(pnl))}
-                            </td>
-                            <td className={`px-3 py-2 text-right font-data ${pnlP >= 0 ? "text-profit" : "text-loss"}`}>
-                              {fmtP(pnlP)}
+                            <td className="px-3 py-2 text-right font-data">{ord.quantity}</td>
+                            <td className="px-3 py-2 text-right font-data font-semibold">₹{fmt(ord.limit_price)}</td>
+                            <td className="px-3 py-2 text-right text-muted-foreground font-mono">
+                              {new Date(ord.created_at).toLocaleTimeString("en-IN", { hour12: false })}
                             </td>
                             <td className="px-2 py-2">
-                              <button onClick={() => closePosition(pos)}
-                                disabled={tradeLoading !== null}
-                                className="text-[10px] px-2 py-0.5 rounded border border-loss/40 text-loss hover:bg-loss/10 transition-colors disabled:opacity-40">
-                                Close
+                              <button
+                                onClick={() => cancelOrder(ord.id)}
+                                disabled={cancellingId === ord.id}
+                                className="text-[10px] px-2 py-0.5 rounded border border-loss/40 text-loss hover:bg-loss/10 transition-colors disabled:opacity-40 flex items-center gap-1">
+                                {cancellingId === ord.id
+                                  ? <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                                  : <X className="w-2.5 h-2.5" />}
+                                Cancel
                               </button>
                             </td>
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                        ))}
+                      </tbody>
+                    </table>
+                  )
                 )}
               </CardContent>
             </Card>

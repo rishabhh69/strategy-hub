@@ -7,6 +7,7 @@ Data fetching strategy (most reliable → least):
   3. Return empty / zeros — never synthetic mock data for quotes/candles
 """
 
+import asyncio
 import logging
 import os
 import random
@@ -174,16 +175,34 @@ def _yahoo_v8(symbol: str, range_: str = "5d", interval: str = "1d") -> List[Dic
 
 def _yahoo_v8_quote(symbol: str) -> Optional[Dict]:
     """
-    Get current/last price via v8 API (2-day daily → last close).
+    Get current/last price via v8 API.
+    Tries multiple range/interval combos so symbols that return 404 on the
+    standard 5d/1d path (e.g. TATAMOTORS.NS) still get a price from the
+    1d/5m or 5d/5m intraday data — the same data the chart already fetches.
     Returns {"price": float, "change_percent": float} or None.
     """
-    bars = _yahoo_v8(symbol, range_="5d", interval="1d")
-    if not bars:
-        return None
-    cur  = bars[-1]["close"]
-    prev = bars[-2]["close"] if len(bars) >= 2 else cur
-    chg  = ((cur - prev) / prev * 100) if prev else 0.0
-    return {"price": round(cur, 2), "change_percent": round(chg, 2)}
+    _COMBOS = [
+        ("5d", "1d"),   # preferred: daily close
+        ("1d", "5m"),   # intraday fallback (always works when chart works)
+        ("5d", "5m"),   # wider intraday window
+    ]
+    for range_, interval in _COMBOS:
+        bars = _yahoo_v8(symbol, range_=range_, interval=interval)
+        if bars:
+            cur  = bars[-1]["close"]
+            prev = bars[-2]["close"] if len(bars) >= 2 else cur
+            chg  = ((cur - prev) / prev * 100) if prev else 0.0
+            return {"price": round(cur, 2), "change_percent": round(chg, 2)}
+
+    # All Yahoo v8 combos failed — last resort: yfinance
+    yf_bars = _yf_history(symbol, period="5d", interval="1d")
+    if yf_bars:
+        cur  = yf_bars[-1]["close"]
+        prev = yf_bars[-2]["close"] if len(yf_bars) >= 2 else cur
+        chg  = ((cur - prev) / prev * 100) if prev else 0.0
+        return {"price": round(cur, 2), "change_percent": round(chg, 2)}
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -535,10 +554,35 @@ Requirements:
             raise HTTPException(500, "OpenAI quota exceeded.")
         raise HTTPException(500, f"OpenAI error: {err_str}")
 
+    # ── Sandboxed execution — uses module-level _SAFE_BUILTINS ────────────────
     try:
-        g:   Dict = {"pd": pd, "np": np}
-        loc: Dict = {}
-        exec(code, g, loc)
+        g: Dict[str, Any] = {
+            "__builtins__": _SAFE_BUILTINS,
+            "pd":           pd,
+            "np":           np,
+        }
+        loc: Dict[str, Any] = {}
+
+        try:
+            exec(code, g, loc)                                           # noqa: S102
+        except NameError as exc:
+            blocked = str(exc)
+            print(f"[Backtest][SANDBOX] NameError blocked: {blocked}")
+            raise HTTPException(
+                400,
+                f"Malicious or unsupported code detected (blocked built-in): {blocked}",
+            )
+        except TypeError as exc:
+            blocked = str(exc)
+            print(f"[Backtest][SANDBOX] TypeError blocked: {blocked}")
+            raise HTTPException(
+                400,
+                f"Malicious or unsupported code detected (type error): {blocked}",
+            )
+        except ImportError as exc:
+            print(f"[Backtest][SANDBOX] ImportError blocked: {exc}")
+            raise HTTPException(400, "Malicious or unsupported code detected (import attempt blocked).")
+
         if "strategy" not in loc:
             raise HTTPException(500, "Generated code has no 'strategy' function.")
         result_df = loc["strategy"](df.copy())
@@ -754,8 +798,37 @@ _MEM_BALANCE:   Dict[str, float]      = {}   # user_id → cash balance
 _MEM_POSITIONS: Dict[str, List[Dict]] = {}   # user_id → open positions
 _MEM_LOGS:      Dict[str, List[Dict]] = {}   # user_id → order log
 _MEM_DAY_PNL:   Dict[str, float]      = {}   # user_id → today's realized P&L
+_MEM_PENDING:   Dict[str, List[Dict]] = {}   # user_id → pending limit orders
 
 STARTING_BALANCE = 1_00_000.00               # ₹1,00,000 starting capital
+
+# ---------------------------------------------------------------------------
+# Bot Manager  — tracks live background strategy workers
+# ---------------------------------------------------------------------------
+_RUNNING_BOTS: Dict[str, asyncio.Task] = {}   # bot_id → asyncio Task
+_BOT_META:     Dict[str, Dict]         = {}   # bot_id → {user_id, symbol, qty, strategy_id, title, started_at}
+
+# ---------------------------------------------------------------------------
+# _SAFE_BUILTINS  — module-level sandbox; shared by /backtest AND bot_worker
+# ---------------------------------------------------------------------------
+_SAFE_BUILTINS: Dict[str, Any] = {
+    "abs": abs, "min": min, "max": max, "sum": sum, "round": round,
+    "pow": pow, "divmod": divmod,
+    "int": int, "float": float, "bool": bool, "str": str,
+    "list": list, "tuple": tuple, "dict": dict, "set": set,
+    "frozenset": frozenset,
+    "len": len, "range": range, "enumerate": enumerate,
+    "zip": zip, "map": map, "filter": filter,
+    "sorted": sorted, "reversed": reversed,
+    "any": any, "all": all, "next": next, "iter": iter,
+    "print": print, "repr": repr,
+    "isinstance": isinstance, "issubclass": issubclass,
+    "hasattr": hasattr, "getattr": getattr,
+    "ValueError": ValueError, "TypeError": TypeError,
+    "KeyError": KeyError, "IndexError": IndexError,
+    "StopIteration": StopIteration, "Exception": Exception,
+    # __import__, open, eval, exec, compile, globals, locals, dir … NOT present
+}
 
 
 # ── low-level memory helpers ─────────────────────────────────────────────────
@@ -833,15 +906,67 @@ def _mem_get_day_pnl(user_id: str) -> float:
     return _MEM_DAY_PNL[user_id]
 
 
+# ── Pending-order memory helpers ─────────────────────────────────────────────
+
+def _mem_get_pending(user_id: str) -> List[Dict]:
+    if user_id not in _MEM_PENDING:
+        if _sb_ok():
+            rows = _sb_get(
+                "paper_pending_orders",
+                {"user_id": f"eq.{user_id}", "status": "eq.pending"},
+                order="created_at.desc",
+            )
+            _MEM_PENDING[user_id] = rows
+        else:
+            _MEM_PENDING[user_id] = []
+    return _MEM_PENDING[user_id]
+
+
+def _mem_add_pending(user_id: str, order: Dict) -> None:
+    orders = _mem_get_pending(user_id)
+    orders.insert(0, order)
+    _MEM_PENDING[user_id] = orders
+    if _sb_ok():
+        _sb_insert("paper_pending_orders", {
+            "user_id":     user_id,
+            "symbol":      order["symbol"],
+            "quantity":    order["quantity"],
+            "side":        order["side"],
+            "limit_price": order["limit_price"],
+            "status":      "pending",
+        })
+
+
+def _mem_cancel_pending(user_id: str, order_id: str) -> bool:
+    """Remove pending order from memory and Supabase. Returns True if found."""
+    orders = _mem_get_pending(user_id)
+    before = len(orders)
+    _MEM_PENDING[user_id] = [o for o in orders if o.get("id") != order_id]
+    if _sb_ok():
+        _sb_update("paper_pending_orders", {"status": "cancelled"}, {"id": order_id})
+    return len(_MEM_PENDING[user_id]) < before
+
+
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 class PaperTradeRequest(BaseModel):
     user_id:     str
     symbol:      str
     quantity:    int
-    side:        str                    # "buy" | "sell"
-    strategy_id: Optional[str] = None
-    price:       Optional[float] = None # if provided, skip live-price fetch
+    side:        str                       # "buy" | "sell"
+    strategy_id: Optional[str]  = None
+    price:       Optional[float] = None   # manual price override (market orders)
+    order_type:  str             = "market"  # "market" | "limit"
+    limit_price: Optional[float] = None   # required when order_type == "limit"
+
+
+class CancelOrderRequest(BaseModel):
+    user_id:  str
+    order_id: str
+
+
+class SquareOffRequest(BaseModel):
+    user_id: str
 
 
 class PaperRestoreRequest(BaseModel):
@@ -849,6 +974,14 @@ class PaperRestoreRequest(BaseModel):
     balance:   float
     positions: List[Dict] = []
     day_pnl:   float = 0.0
+
+
+class DeployBotRequest(BaseModel):
+    user_id:     str
+    strategy_id: str
+    symbol:      str
+    quantity:    int
+    title:       str = ""   # display name, passed from frontend
 
 
 # ---------------------------------------------------------------------------
@@ -898,6 +1031,161 @@ async def get_paper_account(user_id: str):
 
 
 # ---------------------------------------------------------------------------
+# _execute_market_order  — shared logic for endpoint AND bot_worker
+# ---------------------------------------------------------------------------
+async def _execute_market_order(
+    user_id:     str,
+    symbol:      str,
+    quantity:    int,
+    side:        str,           # "buy" | "sell"
+    strategy_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Executes a paper market order entirely in-memory (+ optional Supabase sync).
+    Returns the same dict shape as the /execute endpoint.
+    Raises HTTPException on hard errors (insufficient funds / no position).
+    """
+    symbol_up = symbol.strip().upper()
+    side      = side.lower()
+    if side not in ("buy", "sell"):
+        raise HTTPException(400, "side must be 'buy' or 'sell'")
+
+    # ── 1. Fetch live price ──────────────────────────────────────────────────
+    sym = normalise(symbol_up)
+    q   = await asyncio.to_thread(_yahoo_v8_quote, sym)
+    exec_price: float = 0.0
+    if q and q.get("price", 0) > 0:
+        exec_price = round(float(q["price"]), 2)
+    else:
+        bars = await asyncio.to_thread(_yf_history, sym, "5d", "1d")
+        if bars:
+            exec_price = round(float(bars[-1]["close"]), 2)
+
+    if exec_price <= 0:
+        raise HTTPException(503, f"Cannot fetch live price for {symbol_up}. Retry later.")
+
+    # Simulate market slippage ±0.05 %
+    slippage   = random.uniform(-0.05, 0.05) / 100
+    exec_price = round(exec_price * (1 + slippage), 2)
+
+    balance      = _mem_get_balance(user_id)
+    positions    = _mem_get_positions(user_id)
+    total_value  = round(exec_price * quantity, 2)
+    order_id     = f"BOT{int(time.time() * 1000) % 10_000_000}"
+    realized_pnl = 0.0
+    new_balance  = balance
+
+    if side == "buy":
+        if balance < total_value:
+            raise HTTPException(
+                400,
+                f"Bot insufficient funds. Need ₹{total_value:,.2f}, have ₹{balance:,.2f}.",
+            )
+        new_balance = round(balance - total_value, 2)
+        _mem_set_balance(user_id, new_balance)
+
+        existing = [p for p in positions if p.get("symbol") == symbol_up]
+        if existing:
+            pos     = existing[0]
+            ex_qty  = int(pos["quantity"])
+            ex_avg  = float(pos["average_price"])
+            new_qty = ex_qty + quantity
+            new_avg = round((ex_qty * ex_avg + quantity * exec_price) / new_qty, 2)
+            pos["quantity"]      = new_qty
+            pos["average_price"] = new_avg
+            pos["side"]          = "buy"
+            if _sb_ok() and pos.get("id"):
+                _sb_update("paper_positions",
+                           {"quantity": new_qty, "average_price": new_avg},
+                           {"id": pos["id"]})
+        else:
+            new_pos: Dict[str, Any] = {
+                "id":            f"local_{int(time.time() * 1000)}",
+                "user_id":       user_id,
+                "symbol":        symbol_up,
+                "quantity":      quantity,
+                "average_price": exec_price,
+                "side":          "buy",
+                "created_at":    datetime.utcnow().isoformat() + "Z",
+            }
+            if _sb_ok():
+                ins = _sb_insert("paper_positions", {
+                    "user_id":       user_id,
+                    "symbol":        symbol_up,
+                    "quantity":      quantity,
+                    "average_price": exec_price,
+                    "side":          "buy",
+                })
+                if ins.get("id"):
+                    new_pos["id"] = ins["id"]
+            positions.append(new_pos)
+
+        msg = (f"Order {order_id}: BOT BUY {quantity} {symbol_up} "
+               f"@ ₹{exec_price:,.2f}  (cost ₹{total_value:,.2f})")
+
+    else:  # sell
+        existing = [p for p in positions if p.get("symbol") == symbol_up]
+        if not existing:
+            raise HTTPException(400, f"No open position for {symbol_up}.")
+
+        pos     = existing[0]
+        ex_qty  = int(pos["quantity"])
+        avg_buy = float(pos["average_price"])
+        qty_sell = min(quantity, ex_qty)   # sell whatever we hold
+
+        realized_pnl = round((exec_price - avg_buy) * qty_sell, 2)
+        sell_value   = round(exec_price * qty_sell, 2)
+        new_balance  = round(balance + sell_value, 2)
+        _mem_set_balance(user_id, new_balance)
+        _MEM_DAY_PNL[user_id] = round(_mem_get_day_pnl(user_id) + realized_pnl, 2)
+
+        net_qty = ex_qty - qty_sell
+        if net_qty > 0:
+            pos["quantity"] = net_qty
+            if _sb_ok() and pos.get("id"):
+                _sb_update("paper_positions", {"quantity": net_qty}, {"id": pos["id"]})
+        else:
+            positions.remove(pos)
+            if _sb_ok() and pos.get("id"):
+                _sb_delete("paper_positions", {"id": pos["id"]})
+
+        pnl_sign = "+" if realized_pnl >= 0 else ""
+        msg = (f"Order {order_id}: BOT SELL {qty_sell} {symbol_up} "
+               f"@ ₹{exec_price:,.2f}  | P&L {pnl_sign}₹{realized_pnl:,.2f}")
+
+    _MEM_POSITIONS[user_id] = positions
+
+    ts_str = datetime.utcnow().isoformat() + "Z"
+    _mem_add_log(user_id, {
+        "user_id":      user_id,
+        "strategy_id":  strategy_id,
+        "symbol":       symbol_up,
+        "action":       side,
+        "quantity":     quantity,
+        "price":        exec_price,
+        "realized_pnl": realized_pnl,
+        "timestamp":    ts_str,
+        "order_type":   "market",
+        "status":       "filled",
+    })
+
+    print(f"[BotEngine] {msg}  |  balance ₹{balance:,.2f} → ₹{new_balance:,.2f}")
+
+    return {
+        "order_id":       order_id,
+        "symbol":         symbol_up,
+        "side":           side,
+        "quantity":       quantity,
+        "executed_price": exec_price,
+        "total_value":    total_value,
+        "realized_pnl":   realized_pnl,
+        "new_balance":    new_balance,
+        "new_day_pnl":    round(_MEM_DAY_PNL.get(user_id, 0.0), 2),
+        "message":        msg,
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /api/paper-trading/execute  —  Paper Trading Matching Engine
 # ---------------------------------------------------------------------------
 @app.post("/api/paper-trading/execute")
@@ -908,6 +1196,56 @@ async def paper_execute(req: PaperTradeRequest):
     side = req.side.lower()
     if side not in ("buy", "sell"):
         raise HTTPException(400, "Side must be 'buy' or 'sell'")
+    order_type = (req.order_type or "market").lower()
+    if order_type not in ("market", "limit"):
+        raise HTTPException(400, "order_type must be 'market' or 'limit'")
+
+    # ── LIMIT ORDER — queue it, do NOT touch balance/positions yet ────────────
+    if order_type == "limit":
+        if not req.limit_price or req.limit_price <= 0:
+            raise HTTPException(400, "limit_price is required and must be > 0 for limit orders")
+        symbol_up = req.symbol.upper()
+        order_id  = f"LO{int(time.time() * 1000) % 10_000_000}"
+        ts_str    = datetime.utcnow().isoformat() + "Z"
+        pending: Dict[str, Any] = {
+            "id":          order_id,
+            "user_id":     req.user_id,
+            "symbol":      symbol_up,
+            "quantity":    req.quantity,
+            "side":        side,
+            "limit_price": round(float(req.limit_price), 2),
+            "status":      "pending",
+            "created_at":  ts_str,
+        }
+        _mem_add_pending(req.user_id, pending)
+        msg = (
+            f"Limit order {order_id} queued: {side.upper()} {req.quantity} {symbol_up} "
+            f"@ ₹{pending['limit_price']:,.2f}"
+        )
+        print(f"[LimitOrder] {msg}")
+        # Log the queued order
+        _mem_add_log(req.user_id, {
+            "user_id":      req.user_id,
+            "strategy_id":  req.strategy_id,
+            "symbol":       symbol_up,
+            "action":       side,
+            "quantity":     req.quantity,
+            "price":        pending["limit_price"],
+            "realized_pnl": 0.0,
+            "timestamp":    ts_str,
+            "order_type":   "limit",
+            "status":       "pending",
+        })
+        return {
+            "order_id":    order_id,
+            "order_type":  "limit",
+            "status":      "pending",
+            "symbol":      symbol_up,
+            "side":        side,
+            "quantity":    req.quantity,
+            "limit_price": pending["limit_price"],
+            "message":     msg,
+        }
 
     symbol_up = req.symbol.upper()
 
@@ -1103,10 +1441,379 @@ async def get_paper_logs(user_id: str, limit: int = 50):
 
 
 # ---------------------------------------------------------------------------
+# GET /api/paper-trading/pending-orders?user_id=
+# ---------------------------------------------------------------------------
+@app.get("/api/paper-trading/pending-orders")
+async def get_pending_orders(user_id: str):
+    if not user_id:
+        raise HTTPException(400, "user_id required")
+    return _mem_get_pending(user_id)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/paper-trading/cancel-order
+# ---------------------------------------------------------------------------
+@app.post("/api/paper-trading/cancel-order")
+async def cancel_order(req: CancelOrderRequest):
+    if not req.user_id or not req.order_id:
+        raise HTTPException(400, "user_id and order_id required")
+    found = _mem_cancel_pending(req.user_id, req.order_id)
+    if not found:
+        raise HTTPException(404, f"Pending order {req.order_id} not found")
+    print(f"[CancelOrder] {req.order_id} cancelled for {req.user_id[:8]}…")
+    return {"ok": True, "order_id": req.order_id, "status": "cancelled"}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/paper-trading/square-off-all
+#   Closes every open position at current market price.
+#   Calculates realized P&L per position, credits proceeds to balance.
+# ---------------------------------------------------------------------------
+@app.post("/api/paper-trading/square-off-all")
+async def square_off_all(req: SquareOffRequest):
+    if not req.user_id:
+        raise HTTPException(400, "user_id required")
+
+    positions = _mem_get_positions(req.user_id)
+    if not positions:
+        return {"ok": True, "message": "No open positions to square off.", "total_pnl": 0.0}
+
+    balance      = _mem_get_balance(req.user_id)
+    total_pnl    = 0.0
+    closed       = []
+    ts_str       = datetime.utcnow().isoformat() + "Z"
+
+    for pos in list(positions):          # iterate a snapshot
+        symbol_up = pos.get("symbol", "")
+        qty       = int(pos.get("quantity", 0))
+        avg_buy   = float(pos.get("average_price", 0))
+        pos_side  = pos.get("side", "buy")
+
+        # ── fetch current market price ────────────────────────────────────
+        exec_price: float = avg_buy   # fallback: close at cost (zero P&L)
+        sym = normalise(symbol_up)
+        q   = _yahoo_v8_quote(sym)
+        if q and q.get("price", 0) > 0:
+            exec_price = round(float(q["price"]), 2)
+        else:
+            bars = _yf_history(sym, period="5d", interval="1d")
+            if bars:
+                exec_price = round(float(bars[-1]["close"]), 2)
+
+        # ── P&L and balance update ────────────────────────────────────────
+        proceeds     = round(exec_price * qty, 2)
+        realized_pnl = round((exec_price - avg_buy) * qty * (1 if pos_side == "buy" else -1), 2)
+        balance      = round(balance + proceeds, 2)
+        total_pnl    = round(total_pnl + realized_pnl, 2)
+
+        # ── remove from memory + Supabase ────────────────────────────────
+        positions = [p for p in positions if p.get("id") != pos.get("id")]
+        if _sb_ok() and pos.get("id"):
+            _sb_delete("paper_positions", {"id": pos["id"]})
+
+        # ── log each fill ─────────────────────────────────────────────────
+        _mem_add_log(req.user_id, {
+            "user_id":      req.user_id,
+            "symbol":       symbol_up,
+            "action":       "sell",
+            "quantity":     qty,
+            "price":        exec_price,
+            "realized_pnl": realized_pnl,
+            "timestamp":    ts_str,
+            "order_type":   "market",
+            "status":       "filled",
+        })
+
+        closed.append({
+            "symbol":       symbol_up,
+            "qty":          qty,
+            "exec_price":   exec_price,
+            "realized_pnl": realized_pnl,
+        })
+        print(f"[SquareOff] {symbol_up} {qty} @ ₹{exec_price:,.2f}  pnl=₹{realized_pnl:,.2f}")
+
+    # ── commit memory state ───────────────────────────────────────────────────
+    _MEM_POSITIONS[req.user_id] = positions
+    _mem_set_balance(req.user_id, balance)
+    _MEM_DAY_PNL[req.user_id] = round(
+        _mem_get_day_pnl(req.user_id) + total_pnl, 2
+    )
+
+    pnl_sign = "+" if total_pnl >= 0 else ""
+    msg = f"Square-off complete: {len(closed)} position(s) closed  |  Total P&L {pnl_sign}₹{total_pnl:,.2f}"
+    print(f"[SquareOff] {msg}  balance=₹{balance:,.2f}")
+
+    return {
+        "ok":         True,
+        "closed":     closed,
+        "new_balance":round(balance, 2),
+        "new_day_pnl":round(_MEM_DAY_PNL[req.user_id], 2),
+        "total_pnl":  total_pnl,
+        "message":    msg,
+    }
+
+
+# ===========================================================================
+# Bot Manager  — background strategy worker + endpoints
+# ===========================================================================
+
+async def bot_worker(
+    bot_id:        str,
+    user_id:       str,
+    strategy_code: str,
+    symbol:        str,
+    quantity:      int,
+    strategy_id:   str,
+) -> None:
+    """
+    Runs a strategy in a 60-second polling loop.
+    On each tick:
+      1. Fetches latest 5-day / 5-minute OHLCV data for the symbol.
+      2. Runs strategy_code through the _SAFE_BUILTINS sandbox.
+      3. Reads the last row's `signal` column (1 = buy, -1 = sell, 0 = hold).
+      4. BUY  if signal == 1  and no existing open position.
+      5. SELL if signal == -1 and an open position exists.
+    """
+    sym_norm = normalise(symbol.upper())
+    print(f"[BotWorker] {bot_id} started  symbol={symbol}  qty={quantity}  user={user_id[:8]}…")
+
+    try:
+        while True:
+            try:
+                # ── 1. Fetch OHLCV (run sync IO in thread pool) ──────────────
+                bars: List[Dict] = await asyncio.to_thread(
+                    _yahoo_v8, sym_norm, "5d", "5m"
+                )
+                if not bars or len(bars) < 5:
+                    print(f"[BotWorker] {bot_id} — not enough data ({len(bars)} bars), skipping tick.")
+                    await asyncio.sleep(60)
+                    continue
+
+                df = pd.DataFrame(bars)
+                # Rename columns to match the strategy template expectations
+                df.rename(columns={
+                    "open": "open", "high": "high", "low": "low",
+                    "close": "close", "volume": "volume",
+                }, inplace=True)
+                # Ensure a `date` column for strategies that reference it
+                if "time" in df.columns:
+                    df["date"] = pd.to_datetime(df["time"], unit="s", utc=True)
+                df = df.dropna(subset=["close"])
+
+                # ── 2. Execute strategy through sandbox ──────────────────────
+                g: Dict[str, Any] = {
+                    "__builtins__": _SAFE_BUILTINS,
+                    "pd":           pd,
+                    "np":           np,
+                }
+                loc: Dict[str, Any] = {}
+                try:
+                    exec(strategy_code, g, loc)          # noqa: S102
+                except (NameError, TypeError, ImportError) as exc:
+                    print(f"[BotWorker] {bot_id} — sandbox violation: {exc}. Bot stopped.")
+                    break   # stop this bot permanently
+
+                if "strategy" not in loc:
+                    print(f"[BotWorker] {bot_id} — no 'strategy' function in code. Bot stopped.")
+                    break
+
+                result_df = loc["strategy"](df.copy())
+
+                # ── 3. Read last signal ───────────────────────────────────────
+                if "signal" not in result_df.columns:
+                    print(f"[BotWorker] {bot_id} — strategy returned no 'signal' column. Skipping.")
+                    await asyncio.sleep(60)
+                    continue
+
+                last_signal = int(result_df["signal"].iloc[-1])
+                positions   = _mem_get_positions(user_id)
+                has_pos     = any(p.get("symbol") == symbol.upper() for p in positions)
+
+                print(
+                    f"[BotWorker] {bot_id}  signal={last_signal:+d}  "
+                    f"has_pos={has_pos}  {symbol}"
+                )
+
+                # ── 4. Buy signal + no current position ───────────────────────
+                if last_signal == 1 and not has_pos:
+                    try:
+                        result = await _execute_market_order(
+                            user_id, symbol, quantity, "buy", strategy_id
+                        )
+                        print(f"[BotWorker] {bot_id} — BUY executed: {result['message']}")
+                        if bot_id in _BOT_META:
+                            _BOT_META[bot_id]["last_action"] = "buy"
+                            _BOT_META[bot_id]["last_price"]  = result["executed_price"]
+                    except HTTPException as exc:
+                        print(f"[BotWorker] {bot_id} — BUY failed: {exc.detail}")
+
+                # ── 5. Sell signal + open position exists ─────────────────────
+                elif last_signal == -1 and has_pos:
+                    pos_qty = next(
+                        (p["quantity"] for p in positions if p.get("symbol") == symbol.upper()),
+                        quantity
+                    )
+                    try:
+                        result = await _execute_market_order(
+                            user_id, symbol, int(pos_qty), "sell", strategy_id
+                        )
+                        print(f"[BotWorker] {bot_id} — SELL executed: {result['message']}")
+                        if bot_id in _BOT_META:
+                            _BOT_META[bot_id]["last_action"] = "sell"
+                            _BOT_META[bot_id]["last_price"]  = result["executed_price"]
+                    except HTTPException as exc:
+                        print(f"[BotWorker] {bot_id} — SELL failed: {exc.detail}")
+
+            except asyncio.CancelledError:
+                raise   # let the outer except handle graceful shutdown
+
+            except Exception as exc:
+                # Log unexpected errors but keep the loop alive
+                print(f"[BotWorker] {bot_id} — unexpected error: {exc}")
+
+            await asyncio.sleep(60)   # wait 1 minute before next tick
+
+    except asyncio.CancelledError:
+        print(f"[BotWorker] {bot_id} — cancelled gracefully.")
+    finally:
+        # Remove from registry when done
+        _RUNNING_BOTS.pop(bot_id, None)
+        _BOT_META.pop(bot_id, None)
+        print(f"[BotWorker] {bot_id} — exited.")
+
+
+# ---------------------------------------------------------------------------
+# POST /api/paper-trading/deploy-bot
+# ---------------------------------------------------------------------------
+@app.post("/api/paper-trading/deploy-bot")
+async def deploy_bot(req: DeployBotRequest):
+    if not req.user_id or not req.strategy_id:
+        raise HTTPException(400, "user_id and strategy_id are required")
+    if req.quantity < 1:
+        raise HTTPException(400, "quantity must be >= 1")
+
+    # ── 1. Fetch strategy code from Supabase ──────────────────────────────────
+    strategy_code = ""
+    strategy_title = req.title or req.strategy_id
+
+    if _sb_ok():
+        rows = _sb_get("strategies", {"id": f"eq.{req.strategy_id}"})
+        if not rows:
+            raise HTTPException(404, f"Strategy '{req.strategy_id}' not found in Supabase.")
+        row = rows[0]
+        strategy_code  = row.get("logic_text", "") or ""
+        strategy_title = row.get("title", req.title or req.strategy_id)
+    else:
+        # Supabase unreachable — frontend must have passed the code; not supported
+        raise HTTPException(503, "Supabase is unreachable. Cannot fetch strategy code.")
+
+    if not strategy_code.strip():
+        raise HTTPException(400, "Strategy has no executable code (logic_text is empty).")
+
+    # ── 2. Generate a unique bot_id ───────────────────────────────────────────
+    bot_id = f"bot_{req.user_id[:8]}_{req.strategy_id[:8]}_{int(time.time())}"
+
+    # Stop any existing bot for the same user + strategy + symbol
+    old_id = next(
+        (bid for bid, meta in _BOT_META.items()
+         if meta["user_id"] == req.user_id
+         and meta["strategy_id"] == req.strategy_id
+         and meta["symbol"] == req.symbol.upper()),
+        None,
+    )
+    if old_id and old_id in _RUNNING_BOTS:
+        _RUNNING_BOTS[old_id].cancel()
+        print(f"[DeployBot] Replaced existing bot {old_id}")
+
+    # ── 3. Store metadata ─────────────────────────────────────────────────────
+    _BOT_META[bot_id] = {
+        "user_id":     req.user_id,
+        "strategy_id": req.strategy_id,
+        "symbol":      req.symbol.upper(),
+        "quantity":    req.quantity,
+        "title":       strategy_title,
+        "started_at":  datetime.utcnow().isoformat() + "Z",
+        "last_action": None,
+        "last_price":  None,
+    }
+
+    # ── 4. Launch background task ─────────────────────────────────────────────
+    task = asyncio.create_task(
+        bot_worker(bot_id, req.user_id, strategy_code, req.symbol, req.quantity, req.strategy_id)
+    )
+    _RUNNING_BOTS[bot_id] = task
+
+    print(
+        f"[DeployBot] {bot_id} launched  "
+        f"strategy='{strategy_title}'  symbol={req.symbol}  qty={req.quantity}  "
+        f"user={req.user_id[:8]}…"
+    )
+
+    return {
+        "ok":      True,
+        "bot_id":  bot_id,
+        "title":   strategy_title,
+        "symbol":  req.symbol.upper(),
+        "quantity": req.quantity,
+        "message": f"Bot '{strategy_title}' deployed on {req.symbol.upper()} (qty {req.quantity}). Checking every 60 s.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/paper-trading/stop-bot   — stop a single bot by bot_id
+# ---------------------------------------------------------------------------
+class StopBotRequest(BaseModel):
+    bot_id: str
+
+
+@app.post("/api/paper-trading/stop-bot")
+async def stop_bot(req: StopBotRequest):
+    task = _RUNNING_BOTS.get(req.bot_id)
+    if not task:
+        raise HTTPException(404, f"Bot '{req.bot_id}' not found or already stopped.")
+    task.cancel()
+    _RUNNING_BOTS.pop(req.bot_id, None)
+    _BOT_META.pop(req.bot_id, None)
+    print(f"[StopBot] {req.bot_id} cancelled by user request.")
+    return {"ok": True, "bot_id": req.bot_id, "message": "Bot stopped."}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/paper-trading/stop-all-bots
+# ---------------------------------------------------------------------------
+@app.post("/api/paper-trading/stop-all-bots")
+async def stop_all_bots():
+    count = len(_RUNNING_BOTS)
+    for bot_id, task in list(_RUNNING_BOTS.items()):
+        task.cancel()
+        print(f"[StopAllBots] Cancelled {bot_id}")
+    _RUNNING_BOTS.clear()
+    _BOT_META.clear()
+    return {"ok": True, "stopped": count, "message": f"{count} bot(s) stopped."}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/paper-trading/running-bots   — frontend polls this for live status
+# ---------------------------------------------------------------------------
+@app.get("/api/paper-trading/running-bots")
+async def get_running_bots(user_id: str):
+    bots = [
+        {**meta, "bot_id": bid, "running": not _RUNNING_BOTS[bid].done()}
+        for bid, meta in _BOT_META.items()
+        if meta.get("user_id") == user_id and bid in _RUNNING_BOTS
+    ]
+    return bots
+
+
+# ---------------------------------------------------------------------------
 # Ctrl+C handler
 # ---------------------------------------------------------------------------
 def _shutdown(*_):
-    print("\nShutting down...")
+    print("\nShutting down — cancelling all bots...")
+    for task in list(_RUNNING_BOTS.values()):
+        task.cancel()
+    _RUNNING_BOTS.clear()
+    _BOT_META.clear()
     sys.exit(0)
 
 

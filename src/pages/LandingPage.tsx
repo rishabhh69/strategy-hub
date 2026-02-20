@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Zap, Database, Shield, ArrowRight, TrendingUp, Code, Play } from "lucide-react";
+import { Sparkles, Zap, Database, Shield, ArrowRight, Code, Play } from "lucide-react";
 import { TickerTape } from "@/components/layout/TickerTape";
 
 const GlassmorphismCard = () => (
@@ -108,9 +108,7 @@ export default function LandingPage() {
       <nav className="border-b border-border bg-background/80 backdrop-blur-xl sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-              <TrendingUp className="w-5 h-5 text-primary-foreground" />
-            </div>
+            <img src="/logo.png" alt="Tradeky" className="w-8 h-8 rounded-lg object-contain" />
             <span className="text-xl font-bold text-foreground">Tradeky</span>
           </div>
           <div className="hidden md:flex items-center gap-8">
@@ -284,9 +282,7 @@ export default function LandingPage() {
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
               <div className="flex items-center gap-2 mb-4">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-                  <TrendingUp className="w-5 h-5 text-primary-foreground" />
-                </div>
+                <img src="/logo.png" alt="Tradeky" className="w-8 h-8 rounded-lg object-contain" />
                 <span className="text-xl font-bold text-foreground">Tradeky</span>
               </div>
               <p className="text-sm text-muted-foreground">
