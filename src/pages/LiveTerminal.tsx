@@ -15,7 +15,7 @@ import { TradingViewChart }   from "@/components/charts/TradingViewChart";
 import { toast }              from "sonner";
 import { supabase }           from "@/integrations/supabase/client";
 
-const API_BASE        = "http://127.0.0.1:8000";
+import { API_BASE } from "@/lib/api";
 const STARTING_CAPITAL = 1_00_000;          // ₹1,00,000
 const PAPER_VERSION   = "v3";              // bump when PersistedPaper schema changes
 

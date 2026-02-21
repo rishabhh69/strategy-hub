@@ -13,7 +13,7 @@ import { MainLayout } from "@/components/layout/MainLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
-const API_BASE    = "http://127.0.0.1:8000";
+import { API_BASE } from "@/lib/api";
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,30}$/;
 const COOLDOWN_DAYS = 14;
 

@@ -16,6 +16,7 @@ import { CodeViewer } from "@/components/studio/CodeViewer";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { API_BASE } from "@/lib/api";
 
 const tickers = [
   { value: "RELIANCE", label: "RELIANCE.NS" },
@@ -77,7 +78,7 @@ export default function StrategyStudio() {
       }
 
       // Call Python backend
-      const response = await fetch("http://127.0.0.1:8000/backtest", {
+      const response = await fetch(`${API_BASE}/backtest`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

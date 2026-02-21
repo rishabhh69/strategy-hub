@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { TrendingUp, TrendingDown } from "lucide-react";
+import { API_BASE } from "@/lib/api";
 
 interface TickerItem {
   symbol: string;
@@ -45,7 +46,7 @@ export function TickerTape() {
       try {
         // Single batch request to avoid "too many requests"
         const q = tickerSymbols.join(",");
-        const response = await fetch(`http://127.0.0.1:8000/quotes?tickers=${encodeURIComponent(q)}`);
+        const response = await fetch(`${API_BASE}/quotes?tickers=${encodeURIComponent(q)}`);
         if (!response.ok) {
           if (response.status === 429 || response.status === 503) {
             // Rate limited - will retry on next interval

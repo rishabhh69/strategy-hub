@@ -15,8 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 
-const WS_BASE  = "ws://127.0.0.1:8000";
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE, WS_BASE } from "@/lib/api";
 
 // ─── Indian stock universe for $ autocomplete ────────────────────────────────
 const STOCK_LIST = [
