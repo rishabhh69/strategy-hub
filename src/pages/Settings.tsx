@@ -87,10 +87,11 @@ export default function Settings() {
           .single();
 
         if (!extErr && extProfile) {
-          setStrategyAlerts(extProfile.strategy_alerts    ?? true);
-          setMarketUpdates(extProfile.market_updates      ?? true);
-          setCommunityMentions(extProfile.community_mentions ?? true);
-          dbChangedAt = extProfile.username_changed_at ?? null;
+          const ext = extProfile as any;
+          setStrategyAlerts(ext.strategy_alerts    ?? true);
+          setMarketUpdates(ext.market_updates      ?? true);
+          setCommunityMentions(ext.community_mentions ?? true);
+          dbChangedAt = ext.username_changed_at ?? null;
         }
       } catch {
         // Columns not yet added via SQL migration — fall through to localStorage

@@ -12,6 +12,9 @@ import Settings from "./pages/Settings";
 import Profile from "./pages/Profile";
 import Auth from "./pages/Auth";
 import LiveTerminal from "./pages/LiveTerminal";
+import AboutUs from "./pages/AboutUs";
+import Institutional from "./pages/Institutional";
+import Careers from "./pages/Careers";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -35,6 +38,9 @@ const App = () => (
           <Route path="/live-terminal" element={<LiveTerminal />} />
           <Route path="/liveterminal" element={<Navigate to="/terminal" replace />} />
           <Route path="/LiveTerminal" element={<Navigate to="/terminal" replace />} />
+          <Route path="/about" element={<AboutUs />} />
+          <Route path="/institutional" element={<Institutional />} />
+          <Route path="/careers" element={<Careers />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
