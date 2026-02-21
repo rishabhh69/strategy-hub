@@ -6,6 +6,6 @@ uvicorn[standard]==0.32.0
 yfinance==0.2.47
 pandas==2.2.3
 numpy==2.1.1
-openai==1.54.3
+openai>=1.50.0
 pydantic==2.9.2
 requests==2.32.3
