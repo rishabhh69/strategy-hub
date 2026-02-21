@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel
@@ -869,7 +869,7 @@ def _mem_get_logs(user_id: str) -> List[Dict]:
                 "paper_orders_log",
                 {"user_id": f"eq.{user_id}"},
                 order="timestamp.desc",
-                limit=200,
+                limit=1000,
             )
         else:
             _MEM_LOGS[user_id] = []
@@ -994,15 +994,24 @@ async def restore_paper_account(req: PaperRestoreRequest):
     if not req.user_id:
         raise HTTPException(400, "user_id required")
 
-    if req.user_id not in _MEM_BALANCE:
-        _MEM_BALANCE[req.user_id]   = req.balance
-        _MEM_POSITIONS[req.user_id] = req.positions
-        _MEM_DAY_PNL[req.user_id]   = req.day_pnl
-        print(
-            f"[PaperRestore] {req.user_id[:8]}…  "
-            f"balance=₹{req.balance:,.2f}  positions={len(req.positions)}  "
-            f"day_pnl=₹{req.day_pnl:,.2f}"
-        )
+    # Always restore positions from the frontend's localStorage — this is the
+    # source of truth after a backend restart. The old guard
+    # `if user_id not in _MEM_BALANCE` was causing positions to be silently
+    # skipped whenever the account-fetch endpoint had already initialised the
+    # balance dict entry before /restore was called.
+    _MEM_POSITIONS[req.user_id] = req.positions
+    _MEM_DAY_PNL[req.user_id]   = req.day_pnl
+
+    # Only overwrite balance if it hasn't been set yet (or if frontend value
+    # is non-default, meaning the user has a real paper balance)
+    if req.user_id not in _MEM_BALANCE or req.balance != STARTING_BALANCE:
+        _MEM_BALANCE[req.user_id] = req.balance
+
+    print(
+        f"[PaperRestore] {req.user_id[:8]}…  "
+        f"balance=₹{_MEM_BALANCE[req.user_id]:,.2f}  "
+        f"positions={len(req.positions)}  day_pnl=₹{req.day_pnl:,.2f}"
+    )
     return {"ok": True, "balance": _MEM_BALANCE[req.user_id]}
 
 
@@ -1343,6 +1352,15 @@ async def paper_execute(req: PaperTradeRequest):
     else:
         # 3a. Fetch the position for this symbol
         existing = [p for p in positions if p.get("symbol") == symbol_up]
+
+        # If not found in memory, try a fresh load from Supabase (handles backend restarts)
+        if not existing and _sb_ok():
+            fresh = _sb_get("paper_positions", {"user_id": f"eq.{user_id}"})
+            if fresh:
+                _MEM_POSITIONS[user_id] = fresh
+                positions = fresh
+                existing = [p for p in positions if p.get("symbol") == symbol_up]
+
         if not existing:
             raise HTTPException(
                 400,
@@ -1434,7 +1452,7 @@ async def paper_execute(req: PaperTradeRequest):
 # GET /api/paper-trading/logs?user_id=&limit=
 # ---------------------------------------------------------------------------
 @app.get("/api/paper-trading/logs")
-async def get_paper_logs(user_id: str, limit: int = 50):
+async def get_paper_logs(user_id: str, limit: int = 500):
     if not user_id:
         raise HTTPException(400, "user_id required")
     return _mem_get_logs(user_id)[:limit]
@@ -1803,6 +1821,469 @@ async def get_running_bots(user_id: str):
         if meta.get("user_id") == user_id and bid in _RUNNING_BOTS
     ]
     return bots
+
+
+# ===========================================================================
+# Community WebSocket Manager
+# ===========================================================================
+
+class ConnectionManager:
+    """
+    Manages all active WebSocket connections for the community chat.
+    Thread-safe for asyncio; one shared instance handles all channels.
+    """
+
+    def __init__(self) -> None:
+        # Maps connection → channel name so we can do per-channel broadcasts
+        self._connections: Dict[WebSocket, str] = {}
+
+    async def connect(self, websocket: WebSocket, channel: str = "general") -> None:
+        await websocket.accept()
+        self._connections[websocket] = channel
+        print(f"[WS] Client connected  channel={channel}  total={len(self._connections)}")
+
+    def disconnect(self, websocket: WebSocket) -> None:
+        channel = self._connections.pop(websocket, "?")
+        print(f"[WS] Client disconnected  channel={channel}  total={len(self._connections)}")
+
+    async def broadcast(self, message: str, channel: str = "general") -> None:
+        """Send message to every client subscribed to the same channel."""
+        dead: List[WebSocket] = []
+        for ws, ch in list(self._connections.items()):
+            if ch != channel:
+                continue
+            try:
+                await ws.send_text(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+    async def broadcast_all(self, message: str) -> None:
+        """Broadcast to every connected client regardless of channel."""
+        dead: List[WebSocket] = []
+        for ws in list(self._connections.keys()):
+            try:
+                await ws.send_text(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+
+manager = ConnectionManager()
+
+
+@app.websocket("/ws/community")
+async def community_websocket(websocket: WebSocket, channel: str = "general"):
+    """
+    Persistent WebSocket connection for community chat.
+
+    Query param:  ?channel=general  |  ?channel=expert
+    Message flow: client sends JSON → server broadcasts to all
+                  clients on the same channel → instant delivery.
+    """
+    await manager.connect(websocket, channel)
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            # Validate it's parseable JSON before echoing
+            try:
+                import json as _json
+                payload = _json.loads(raw)
+                # Attach server-side timestamp if missing
+                if "timestamp" not in payload:
+                    payload["timestamp"] = datetime.utcnow().isoformat() + "Z"
+                out = _json.dumps(payload)
+            except ValueError:
+                # Non-JSON plain text — wrap it
+                out = raw
+            await manager.broadcast(out, channel)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as exc:
+        print(f"[WS] Unexpected error: {exc}")
+        manager.disconnect(websocket)
+
+
+# ===========================================================================
+# Greed AI Engine  — lightweight real-time risk health scorer
+# ===========================================================================
+
+class GreedAIRequest(BaseModel):
+    strategy_title: str
+    symbol:         str
+    qty:            int
+    pnl:            float
+    live_price:     float
+    side:           str = "buy"   # "buy" | "sell" — position direction
+
+
+class GreedAIResponse(BaseModel):
+    health_score:    int    # 0 – 100
+    insight:         str
+    status:          str    # "healthy" | "warning" | "critical"
+    change_percent:  float  # live day-change % of the symbol (for UI display)
+
+
+# Insight templates — include market-trend-aware variants
+_GREED_INSIGHTS: Dict[str, List[str]] = {
+    "healthy": [
+        "Strategy is performing within healthy parameters. Momentum looks solid.",
+        "Risk-reward ratio is favourable. Position size is well-controlled.",
+        "Trend alignment is strong. No immediate adjustments needed.",
+        "Equity curve is expanding. Continue monitoring for reversal signals.",
+        "Volatility is contained and the market trend supports your position.",
+        "Price momentum is with you. Trailing stop recommended to lock profits.",
+    ],
+    "warning": [
+        "Momentum is fading — consider tightening your stop-loss.",
+        "P&L drawdown detected. Review position sizing before adding exposure.",
+        "Market structure is weakening. Partial profit-taking may reduce risk.",
+        "Strategy is in a stressed zone. Avoid adding new entries here.",
+        "Adverse price action noted. Keep trailing stops active.",
+        "Risk metrics are elevated. Consider reducing qty by 25–50%.",
+        "Market is moving against your position. Monitor closely.",
+    ],
+    "critical": [
+        "⚠️ Severe drawdown — emergency stop recommended immediately.",
+        "⚠️ Strategy health is critical. Capital preservation is the priority now.",
+        "⚠️ Loss threshold breached. Consider full position exit.",
+        "⚠️ Greed AI detected extreme risk. Halt new orders and review.",
+        "⚠️ P&L deteriorating rapidly. Protect remaining capital.",
+        "⚠️ Market is trending strongly against you. Exit now to cut losses.",
+    ],
+}
+
+
+@app.post("/api/greed-ai/analyze", response_model=GreedAIResponse)
+async def greed_ai_analyze(req: GreedAIRequest):
+    """
+    Risk health score (0-100) combining P&L, position size, AND live market
+    trend so the insight reflects what the market is actually doing right now.
+
+    Scoring layers (clamped to [0, 100]):
+      Base                  =  70
+      P&L ratio bonus/malus =  pnl / position_value * 100  (capped ±25)
+      Outright-loss penalty =  −15  (and extra −20 if loss > 5 % of value)
+      Market-trend factor   =  change_pct adjusted for position direction (±15)
+      Jitter                =  ±5   (UI feels "alive" on every poll)
+    """
+    live_price = max(req.live_price, 0.01)
+    qty        = max(req.qty, 1)
+
+    # ── 1. Get live day-change % — prefer cache (fast), fall back to network ──
+    change_pct: float = 0.0
+    try:
+        sym_ns = req.symbol if "." in req.symbol else f"{req.symbol}.NS"
+        cache_key = f"quote:{sym_ns}"
+        now_ts = time.time()
+        if cache_key in _quote_cache and now_ts < _quote_cache[cache_key][1]:
+            # Use cached value — instant, no network round-trip
+            change_pct = _quote_cache[cache_key][0].get("change_percent", 0.0)
+        else:
+            # Cache miss — fetch but with a short timeout so it doesn't block
+            quote = await asyncio.wait_for(
+                asyncio.to_thread(_yahoo_v8_quote, req.symbol),
+                timeout=3.0
+            )
+            if quote:
+                change_pct = quote.get("change_percent", 0.0)
+    except Exception:
+        pass   # non-fatal — scoring continues without market trend factor
+
+    # ── 2. Base ──────────────────────────────────────────────────────────────
+    score: float = 70.0
+
+    # ── 3. P&L ratio relative to position value ──────────────────────────────
+    position_value = live_price * qty
+    pnl_ratio      = req.pnl / position_value if position_value > 0 else 0.0
+    pnl_bonus      = max(-25.0, min(25.0, pnl_ratio * 100))
+    score += pnl_bonus
+
+    # ── 4. Extra penalty for outright losses ──────────────────────────────────
+    if req.pnl < 0:
+        score -= 15.0
+        if req.pnl < -(position_value * 0.05):   # > 5 % loss on position
+            score -= 20.0
+
+    # ── 5. Market trend factor — direction-aware ──────────────────────────────
+    #   A long position benefits when price rises, hurts when it falls.
+    #   A short position benefits when price falls, hurts when it rises.
+    direction   = 1 if req.side.lower() == "buy" else -1
+    trend_score = direction * change_pct           # e.g. +2 % move on long → +2
+    trend_bonus = max(-15.0, min(15.0, trend_score * 2))   # scaled, capped ±15
+    score += trend_bonus
+
+    # ── 6. Jitter (±5) so bar "breathes" every poll ──────────────────────────
+    score += random.uniform(-5.0, 5.0)
+
+    # ── 7. Clamp ──────────────────────────────────────────────────────────────
+    health_score = int(max(0, min(100, round(score))))
+
+    # ── 8. Status + insight ───────────────────────────────────────────────────
+    if health_score > 60:
+        status = "healthy"
+    elif health_score >= 30:
+        status = "warning"
+    else:
+        status = "critical"
+
+    insight = random.choice(_GREED_INSIGHTS[status])
+
+    print(
+        f"[GreedAI] {req.strategy_title} | {req.symbol} "
+        f"pnl=₹{req.pnl:+.2f}  chg={change_pct:+.2f}%  "
+        f"score={health_score}  status={status}"
+    )
+
+    return GreedAIResponse(
+        health_score=health_score,
+        insight=insight,
+        status=status,
+        change_percent=round(change_pct, 2),
+    )
+
+
+# ---------------------------------------------------------------------------
+# User Profile — GET & POST
+# ---------------------------------------------------------------------------
+import re as _re
+
+_USERNAME_RE = _re.compile(r"^[a-zA-Z0-9_]{3,30}$")
+
+
+_USERNAME_COOLDOWN_DAYS = 14
+
+
+class ProfileUpdate(BaseModel):
+    user_id:             str
+    username:            str
+    strategy_alerts:     bool = True
+    market_updates:      bool = True
+    community_mentions:  bool = True
+
+
+def _username_taken(username: str, exclude_user_id: str) -> bool:
+    """Return True if the username (case-insensitive) is already claimed by another user."""
+    rows = _sb_get(
+        "profiles",
+        filters={"username": f"ilike.{username}"},
+        select="user_id",
+        limit=5,
+    )
+    return any(r.get("user_id") != exclude_user_id for r in rows)
+
+
+def _cooldown_remaining(username_changed_at: Optional[str]) -> Optional[int]:
+    """
+    Returns number of DAYS remaining in the cooldown, or None if the
+    cooldown has expired (or was never set).
+    """
+    if not username_changed_at:
+        return None
+    try:
+        from datetime import timezone
+        changed = datetime.fromisoformat(username_changed_at.replace("Z", "+00:00"))
+        elapsed = datetime.now(timezone.utc) - changed
+        remaining = _USERNAME_COOLDOWN_DAYS - elapsed.days
+        return remaining if remaining > 0 else None
+    except Exception:
+        return None
+
+
+@app.get("/api/user/profile")
+async def get_user_profile(user_id: str):
+    """Return username + notification preferences + cooldown info."""
+    if not user_id:
+        raise HTTPException(400, "user_id required")
+    rows = _sb_get(
+        "profiles",
+        filters={"user_id": f"eq.{user_id}"},
+        select="username,strategy_alerts,market_updates,community_mentions,username_changed_at",
+    )
+    if rows:
+        row = rows[0]
+        remaining = _cooldown_remaining(row.get("username_changed_at"))
+        return {
+            **row,
+            "username_cooldown_days": remaining,   # int or null
+        }
+    return {
+        "username":             "",
+        "strategy_alerts":      True,
+        "market_updates":       True,
+        "community_mentions":   True,
+        "username_changed_at":  None,
+        "username_cooldown_days": None,
+    }
+
+
+@app.get("/api/user/check-username")
+async def check_username_endpoint(username: str, user_id: str):
+    """
+    Real-time availability check.
+    Returns { "available": bool, "reason": str }
+    """
+    username = username.strip()
+    if not username:
+        return {"available": False, "reason": "Username cannot be empty."}
+    if not _USERNAME_RE.match(username):
+        return {"available": False,
+                "reason": "3–30 chars, letters, numbers and underscores only."}
+    if _username_taken(username, exclude_user_id=user_id):
+        return {"available": False, "reason": "That username is already taken."}
+    return {"available": True, "reason": ""}
+
+
+@app.post("/api/user/profile")
+async def update_user_profile(req: ProfileUpdate):
+    """
+    Validate-only endpoint — the frontend writes to Supabase directly.
+    This route does:
+      1. Format check
+      2. Uniqueness check
+      3. Cooldown check (14-day lock on username changes)
+    Returns { "ok": true, "username_changed_at": <iso> } on success,
+    or raises HTTP 400/409/423.
+    """
+    if not req.user_id:
+        raise HTTPException(400, "user_id required")
+
+    username = req.username.strip()
+
+    # ── 1. Format ─────────────────────────────────────────────────────────────
+    if not username:
+        raise HTTPException(400, "Username cannot be empty.")
+    if not _USERNAME_RE.match(username):
+        raise HTTPException(400,
+            "Username must be 3–30 characters: letters, numbers, underscores only.")
+
+    # ── 2. Fetch current profile to check if username is actually changing ────
+    rows = _sb_get("profiles",
+                   filters={"user_id": f"eq.{req.user_id}"},
+                   select="username,username_changed_at")
+    current = rows[0] if rows else {}
+    current_username = (current.get("username") or "").strip()
+    username_is_changing = username.lower() != current_username.lower()
+
+    if username_is_changing:
+        # ── 3. Cooldown check ─────────────────────────────────────────────────
+        remaining = _cooldown_remaining(current.get("username_changed_at"))
+        if remaining is not None:
+            raise HTTPException(
+                423,   # 423 Locked
+                f"Username was changed recently. You can change it again in "
+                f"{remaining} day{'s' if remaining != 1 else ''}."
+            )
+        # ── 4. Uniqueness check ───────────────────────────────────────────────
+        if _username_taken(username, exclude_user_id=req.user_id):
+            raise HTTPException(409, "That username is already taken. Please choose another.")
+
+    # ── 5. Determine new username_changed_at ──────────────────────────────────
+    new_changed_at = (
+        datetime.utcnow().isoformat() + "Z" if username_is_changing
+        else current.get("username_changed_at")
+    )
+
+    # ── 6. Persist via Supabase (backend path — also reliable when token ok) ──
+    _sb_update(
+        "profiles",
+        {
+            "username":              username,
+            "strategy_alerts":       req.strategy_alerts,
+            "market_updates":        req.market_updates,
+            "community_mentions":    req.community_mentions,
+            "username_changed_at":   new_changed_at if username_is_changing else current.get("username_changed_at"),
+            "updated_at":            datetime.utcnow().isoformat() + "Z",
+        },
+        {"user_id": req.user_id},
+    )
+    print(f"[Profile] saved for {req.user_id[:8]}… username={username!r} changed={username_is_changing}")
+    return {"ok": True, "username_changed_at": new_changed_at}
+
+
+# ---------------------------------------------------------------------------
+# Notifications — GET & mark-read
+# ---------------------------------------------------------------------------
+class NotificationMarkRead(BaseModel):
+    user_id: str
+
+
+@app.get("/api/notifications")
+async def get_notifications(user_id: str):
+    """Return the latest 20 notifications for the user, newest first."""
+    if not user_id:
+        raise HTTPException(400, "user_id required")
+    rows = _sb_get(
+        "notifications",
+        filters={"user_id": f"eq.{user_id}"},
+        order="created_at.desc",
+        limit=20,
+    )
+    return rows or []
+
+
+@app.post("/api/notifications/mark-read")
+async def mark_notifications_read(req: NotificationMarkRead):
+    """Mark all unread notifications as read for the given user."""
+    if not req.user_id:
+        raise HTTPException(400, "user_id required")
+    _sb_update(
+        "notifications",
+        {"is_read": True},
+        {"user_id": req.user_id, "is_read": "false"},
+    )
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Community: Trending Tickers from message mentions
+# ---------------------------------------------------------------------------
+_DEFAULT_TRENDING = ["$NIFTY", "$BANKNIFTY", "$RELIANCE", "$HDFCBANK", "$TCS"]
+
+@app.get("/api/community/trending-tickers")
+async def community_trending_tickers():
+    """
+    Scan all community_messages from the past 7 days for $TICKER mentions,
+    count occurrences, and return the top 5.  Falls back to defaults when
+    fewer than 3 unique tickers are found in messages.
+    """
+    import re as _re
+    import json as _json
+    from datetime import datetime, timezone, timedelta
+
+    tickers: Dict[str, int] = {}
+
+    try:
+        # ISO-8601 cutoff: 7 days ago
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+        rows = _sb_get(
+            "community_messages",
+            params={"created_at": f"gte.{cutoff}", "select": "content"},
+        )
+
+        pattern = _re.compile(r"\$([A-Z&\-]{2,20})", _re.IGNORECASE)
+
+        for row in (rows or []):
+            content = row.get("content") or ""
+            for match in pattern.finditer(content):
+                ticker = f"${match.group(1).upper()}"
+                tickers[ticker] = tickers.get(ticker, 0) + 1
+
+    except Exception as exc:
+        print(f"[trending-tickers] error: {exc}")
+
+    if len(tickers) >= 3:
+        # Sort by mention count descending, take top 5
+        top = sorted(tickers.items(), key=lambda x: x[1], reverse=True)[:5]
+        result = [{"ticker": t, "count": c} for t, c in top]
+    else:
+        # Not enough organic mentions → use defaults
+        result = [{"ticker": t, "count": 0} for t in _DEFAULT_TRENDING]
+
+    return {"tickers": result}
 
 
 # ---------------------------------------------------------------------------

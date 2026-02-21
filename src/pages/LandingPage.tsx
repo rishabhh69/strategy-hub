@@ -1,7 +1,9 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Sparkles, Zap, Database, Shield, ArrowRight, Code, Play } from "lucide-react";
 import { TickerTape } from "@/components/layout/TickerTape";
+import { supabase } from "@/integrations/supabase/client";
 
 const GlassmorphismCard = () => (
   <div className="relative w-full max-w-md">
@@ -99,6 +101,24 @@ const StepCard = ({
 );
 
 export default function LandingPage() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [authReady,  setAuthReady]  = useState(false);   // true once we know auth state
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    // onAuthStateChange fires INITIAL_SESSION immediately on mount — single source of truth
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsLoggedIn(!!session);
+      setAuthReady(true);
+    });
+    // Belt-and-suspenders: also call getSession in case the event fires late
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsLoggedIn(!!session);
+      setAuthReady(true);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
   return (
     <div className="min-h-screen bg-background">
       {/* Ticker Tape */}
@@ -107,10 +127,12 @@ export default function LandingPage() {
       {/* Navigation */}
       <nav className="border-b border-border bg-background/80 backdrop-blur-xl sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          {/* Logo — always stays on landing page */}
+          <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
             <img src="/logo.png" alt="Tradeky" className="w-8 h-8 rounded-lg object-contain" />
             <span className="text-xl font-bold text-foreground">Tradeky</span>
-          </div>
+          </Link>
+
           <div className="hidden md:flex items-center gap-8">
             <Link to="/marketplace" className="text-muted-foreground hover:text-foreground transition-colors">
               Marketplace
@@ -122,14 +144,29 @@ export default function LandingPage() {
               Community
             </Link>
           </div>
-          <div className="flex items-center gap-3">
-            <Link to="/auth">
-              <Button variant="ghost" size="sm">Log In</Button>
-            </Link>
+
+          {/* Render nothing until we know auth state — prevents wrong buttons flashing */}
+          {authReady && !isLoggedIn && (
+            <div className="flex items-center gap-3">
+              <Link to="/auth">
+                <Button variant="ghost" size="sm">Log In</Button>
+              </Link>
+              <Link to="/auth">
+                <Button size="sm" className="btn-glow">Get Started</Button>
+              </Link>
+            </div>
+          )}
+
+          {authReady && isLoggedIn && (
             <Link to="/strategy-studio">
-              <Button size="sm" className="btn-glow">Get Started</Button>
+              <Button size="sm" className="btn-glow">Go to Dashboard →</Button>
             </Link>
-          </div>
+          )}
+
+          {/* Skeleton placeholder while auth state loads */}
+          {!authReady && (
+            <div className="w-32 h-8 rounded-lg bg-muted/20 animate-pulse" />
+          )}
         </div>
       </nav>
 

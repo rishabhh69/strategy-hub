@@ -6,7 +6,7 @@ import {
   ChevronLeft,
   Monitor
 } from "lucide-react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -59,14 +59,19 @@ export function AppSidebar({ collapsed, onCollapse }: AppSidebarProps) {
       {/* Logo */}
       <div className="h-14 flex items-center justify-between px-4 border-b border-sidebar-border">
         {!collapsed && (
-          <div className="flex items-center gap-2">
+          <Link
+            to="/"
+            className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+          >
             <img src="/logo.png" alt="Tradeky" className="w-8 h-8 rounded-lg object-contain" />
             <span className="font-semibold text-lg text-foreground">Tradeky</span>
-          </div>
+          </Link>
         )}
-        
+
         {collapsed && (
-          <img src="/logo.png" alt="Tradeky" className="w-8 h-8 rounded-lg object-contain mx-auto" />
+          <Link to="/" className="hover:opacity-80 transition-opacity">
+            <img src="/logo.png" alt="Tradeky" className="w-8 h-8 rounded-lg object-contain mx-auto" />
+          </Link>
         )}
         
         <Button

@@ -106,7 +106,7 @@ export default function Marketplace() {
 
   return (
     <MainLayout>
-      <div className="p-4 md:p-6 max-w-7xl mx-auto">
+      <div className="p-4 md:p-6 max-w-7xl mx-auto overflow-auto h-full">
         {/* Header */}
         <div className="mb-6">
           <h1 className="text-xl font-semibold text-foreground">Strategy Marketplace</h1>

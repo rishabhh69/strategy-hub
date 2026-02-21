@@ -8,7 +8,7 @@ import {
 import {
   TrendingUp, TrendingDown, Activity, AlertTriangle, Square,
   Radio, ArrowUpRight, ArrowDownRight, Clock, Zap, RefreshCw,
-  Bot, Rocket, Plus, X, RotateCcw, IndianRupee, ListOrdered, Ban,
+  Bot, Rocket, Plus, X, RotateCcw, IndianRupee, ListOrdered, Ban, Brain,
 } from "lucide-react";
 import { MainLayout }         from "@/components/layout/MainLayout";
 import { TradingViewChart }   from "@/components/charts/TradingViewChart";
@@ -78,6 +78,10 @@ interface DeployedBot {
   pnl:           number;
   qty:           number;
   deployedAt:    string;
+  // Greed AI fields
+  healthScore?:  number;
+  greedInsight?: string;
+  healthStatus?: "healthy" | "warning" | "critical";
 }
 
 // ─── localStorage helpers ─────────────────────────────────────────────────────
@@ -204,7 +208,19 @@ export default function LiveTerminal() {
   // Backend
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
 
-  const logEndRef = useRef<HTMLDivElement>(null);
+  const logEndRef          = useRef<HTMLDivElement>(null);
+  // Tracks bots that already fired a critical Greed AI alert — prevents spam
+  const criticalAlertedRef = useRef<Set<string>>(new Set());
+
+  // ── Position-level Greed AI ───────────────────────────────────────────────
+  interface PositionHealth {
+    score:     number;
+    status:    "healthy" | "warning" | "critical";
+    insight:   string;
+    changePct: number;
+  }
+  const [positionHealth,  setPositionHealth]  = useState<Record<string, PositionHealth>>({});
+  const positionCriticalRef = useRef<Set<string>>(new Set());
 
   // ── 1. Resolve user ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -267,18 +283,24 @@ export default function LiveTerminal() {
 
   const fetchLogs = useCallback(async (uid: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/paper-trading/logs?user_id=${uid}&limit=50`);
-      if (res.ok) {
-        const rows: any[] = await res.json();
-        setOrderLog(rows.map(lg => ({
-          time:    new Date(lg.timestamp).toLocaleTimeString("en-IN", { hour12: false }),
-          type:    "trade" as const,
-          action:  lg.action as "buy" | "sell",
-          message: `${String(lg.action).toUpperCase()} ${lg.quantity} ${lg.symbol} @ ₹${fmt(Number(lg.price))}` +
-                   (lg.realized_pnl && lg.action === "sell" ? `  P&L ${lg.realized_pnl >= 0 ? "+" : ""}₹${fmt(lg.realized_pnl)}` : ""),
-          pnl:     lg.realized_pnl ?? undefined,
-        })));
-      }
+      const res = await fetch(`${API_BASE}/api/paper-trading/logs?user_id=${uid}&limit=500`);
+      if (!res.ok) return;
+      const rows: any[] = await res.json();
+      const incoming: OrderLogEntry[] = rows.map(lg => ({
+        time:    new Date(lg.timestamp).toLocaleTimeString("en-IN", { hour12: false }),
+        type:    "trade" as const,
+        action:  lg.action as "buy" | "sell",
+        message: `${String(lg.action).toUpperCase()} ${lg.quantity} ${lg.symbol} @ ₹${fmt(Number(lg.price))}` +
+                 (lg.realized_pnl && lg.action === "sell" ? `  P&L ${lg.realized_pnl >= 0 ? "+" : ""}₹${fmt(lg.realized_pnl)}` : ""),
+        pnl:     lg.realized_pnl ?? undefined,
+      }));
+      // Merge with existing state — deduplicate by "time+message" key, keep all history
+      setOrderLog(prev => {
+        const existingKeys = new Set(prev.map(e => `${e.time}|${e.message}`));
+        const fresh = incoming.filter(e => !existingKeys.has(`${e.time}|${e.message}`));
+        // incoming is newest-first; prev may also be newest-first — combine and stable-sort
+        return [...fresh, ...prev];
+      });
     } catch {}
   }, []);
 
@@ -338,7 +360,7 @@ export default function LiveTerminal() {
     if (!userId || accountLoading) return;
     savePaperState(userId, {
       version: PAPER_VERSION, balance: paperBalance, dayPnl,
-      positions, orderLog: orderLog.slice(0, 100), savedAt: new Date().toISOString(),
+      positions, orderLog: orderLog.slice(0, 500), savedAt: new Date().toISOString(),
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paperBalance, dayPnl, positions, orderLog]);
@@ -397,8 +419,146 @@ export default function LiveTerminal() {
     return () => { cancelled = true; clearInterval(id); };
   }, [positions]);
 
-  // ── 11. Auto-scroll log ───────────────────────────────────────────────────────
-  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [orderLog]);
+  // ── 11. Greed AI polling — every 20 s for active bots ────────────────────────
+  useEffect(() => {
+    if (!deployedBots.length) return;
+    let cancelled = false;
+
+    const pollGreedAI = async () => {
+      const activeBots = deployedBots.filter(b => b.status === "scanning" || b.status === "holding");
+      if (!activeBots.length) return;
+
+      const updates = await Promise.all(
+        activeBots.map(async bot => {
+          try {
+            const res = await fetch(`${API_BASE}/api/greed-ai/analyze`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                strategy_title: bot.strategyTitle,
+                symbol:         bot.ticker,
+                qty:            bot.qty,
+                pnl:            bot.pnl,
+                live_price:     positionPrices[bot.ticker] ?? livePrice ?? 0,
+              }),
+            });
+            if (!res.ok) return null;
+            const data = await res.json();
+            return { bot_id: bot.bot_id, ...data };
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      if (cancelled) return;
+
+      setDeployedBots(prev => prev.map(bot => {
+        const update = updates.find(u => u?.bot_id === bot.bot_id);
+        if (!update) return bot;
+
+        // ── Step 4: critical alert (fires only once per bot) ──────────────
+        if (
+          update.health_score < 30 &&
+          !criticalAlertedRef.current.has(bot.bot_id)
+        ) {
+          criticalAlertedRef.current.add(bot.bot_id);
+          toast.error(
+            `⚠️ Greed AI Alert: "${bot.strategyTitle}" health is critical (${update.health_score}/100). Consider emergency stop.`,
+            { duration: 8000 }
+          );
+        }
+        // Reset alert flag when bot recovers above critical threshold
+        if (update.health_score >= 30) {
+          criticalAlertedRef.current.delete(bot.bot_id);
+        }
+
+        return {
+          ...bot,
+          healthScore:  update.health_score,
+          greedInsight: update.insight,
+          healthStatus: update.status,
+        };
+      }));
+    };
+
+    pollGreedAI();
+    const id = setInterval(pollGreedAI, 15_000);
+    return () => { cancelled = true; clearInterval(id); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deployedBots.length, livePrice, positionPrices]);
+
+  // ── 12. Greed AI for open positions (manual trades) — every 25 s ─────────────
+  useEffect(() => {
+    if (!positions.length) { setPositionHealth({}); return; }
+    let cancelled = false;
+
+    const pollPositions = async () => {
+      const results = await Promise.all(
+        positions.map(async pos => {
+          const pnl = ((positionPrices[pos.symbol] ?? pos.average_price) - pos.average_price)
+                      * pos.quantity * (pos.side === "buy" ? 1 : -1);
+          try {
+            const res = await fetch(`${API_BASE}/api/greed-ai/analyze`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                strategy_title: `Manual · ${pos.symbol}`,
+                symbol:         pos.symbol,
+                qty:            pos.quantity,
+                pnl,
+                live_price:     positionPrices[pos.symbol] ?? pos.average_price,
+                side:           pos.side,
+              }),
+            });
+            if (!res.ok) return null;
+            const data = await res.json();
+            return { id: pos.id, symbol: pos.symbol, ...data };
+          } catch { return null; }
+        })
+      );
+
+      if (cancelled) return;
+
+      const next: Record<string, PositionHealth> = {};
+      for (const r of results) {
+        if (!r) continue;
+        next[r.id] = {
+          score:     r.health_score,
+          status:    r.status,
+          insight:   r.insight,
+          changePct: r.change_percent ?? 0,
+        };
+
+        // Critical alert — fires once per position, resets when recovered
+        if (r.health_score < 30 && !positionCriticalRef.current.has(r.id)) {
+          positionCriticalRef.current.add(r.id);
+          toast.error(
+            `⚠️ Greed AI: "${r.symbol}" position is critical (${r.health_score}/100). Consider closing to protect capital.`,
+            { duration: 8000 }
+          );
+        }
+        if (r.health_score >= 30) positionCriticalRef.current.delete(r.id);
+      }
+      setPositionHealth(next);
+    };
+
+    pollPositions();
+    const id = setInterval(pollPositions, 15_000);
+    return () => { cancelled = true; clearInterval(id); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positions.length, positionPrices]);
+
+  // ── 13. Smart auto-scroll — only scroll to top (newest) if user hasn't scrolled ──
+  const logScrollRef = useRef<HTMLDivElement>(null);
+  const userScrolledLogRef = useRef(false);
+
+  useEffect(() => {
+    const el = logScrollRef.current;
+    if (!el || userScrolledLogRef.current) return;
+    // newest entries are at index 0, rendered at top — scroll to top
+    el.scrollTop = 0;
+  }, [orderLog]);
 
   // ── Execute Trade ─────────────────────────────────────────────────────────────
   const executeTrade = async (side: "buy" | "sell") => {
@@ -719,10 +879,13 @@ export default function LiveTerminal() {
         </div>
 
         {/* ── MAIN 3-COLUMN GRID ───────────────────────────────────────────── */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 p-3 overflow-hidden min-h-0">
+        {/* Outer div scrolls — grid grows to full content height so every  */}
+        {/* section (incl. Running Bots) is always reachable by scrolling.  */}
+        <div className="flex-1 overflow-auto">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 p-3">
 
           {/* ── LEFT PANEL (3 cols) ─────────────────────────────────────────── */}
-          <div className="lg:col-span-3 flex flex-col gap-3 overflow-auto min-h-0">
+          <div className="lg:col-span-3 flex flex-col gap-3">
 
             {/* Quick Order Form */}
             <Card className="shrink-0">
@@ -853,7 +1016,7 @@ export default function LiveTerminal() {
             </Card>
 
             {/* Running Bots */}
-            <div className="flex-1 flex flex-col gap-2 overflow-auto min-h-0">
+            <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between shrink-0">
                 <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
                   <Bot className="w-3 h-3" /> Running Bots
@@ -926,6 +1089,44 @@ export default function LiveTerminal() {
                             {bot.pnl >= 0 ? "+" : ""}₹{fmt(bot.pnl)}
                           </span>
                         </div>
+
+                        {/* ── Greed AI Health Bar ── */}
+                        {bot.healthScore !== undefined && (
+                          <div className="mt-2 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="flex items-center gap-1 text-[9px] text-muted-foreground font-semibold uppercase tracking-wide">
+                                <Brain className="w-2.5 h-2.5" />
+                                Greed AI Health
+                              </span>
+                              <span className={`text-[9px] font-bold font-data ${
+                                bot.healthStatus === "healthy"  ? "text-profit"      :
+                                bot.healthStatus === "warning"  ? "text-yellow-400"  :
+                                                                  "text-loss"
+                              }`}>
+                                {bot.healthScore}/100
+                              </span>
+                            </div>
+
+                            {/* Progress track */}
+                            <div className="w-full h-1 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-700 ${
+                                  bot.healthStatus === "healthy"  ? "bg-profit"     :
+                                  bot.healthStatus === "warning"  ? "bg-yellow-500" :
+                                                                    "bg-loss"
+                                }`}
+                                style={{ width: `${bot.healthScore}%` }}
+                              />
+                            </div>
+
+                            {/* Insight text */}
+                            {bot.greedInsight && (
+                              <p className="text-[9px] text-muted-foreground leading-tight italic">
+                                {bot.greedInsight}
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </CardContent>
                     </Card>
                   ))}
@@ -935,7 +1136,7 @@ export default function LiveTerminal() {
           </div>
 
           {/* ── CENTRE (6 cols) ─────────────────────────────────────────────── */}
-          <div className="lg:col-span-6 flex flex-col gap-3 min-h-0">
+          <div className="lg:col-span-6 flex flex-col gap-3">
 
             {/* Chart card — fixed height so positions table always visible below */}
             <Card className="flex flex-col shrink-0" style={{ height: "340px" }}>
@@ -967,7 +1168,7 @@ export default function LiveTerminal() {
             </Card>
 
             {/* Positions / Pending Orders — tabbed */}
-            <Card className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            <Card className="flex flex-col overflow-hidden" style={{ maxHeight: "420px" }}>
               {/* Tab header */}
               <CardHeader className="py-0 px-0 border-b border-border shrink-0">
                 <div className="flex items-center justify-between px-2">
@@ -1001,7 +1202,7 @@ export default function LiveTerminal() {
                 </div>
               </CardHeader>
 
-              <CardContent className="p-0 flex-1 overflow-auto">
+              <CardContent className="p-0 overflow-auto flex-1">
                 {/* ── Open Positions tab ── */}
                 {centreTab === "positions" && (
                   positions.length === 0 ? (
@@ -1024,36 +1225,76 @@ export default function LiveTerminal() {
                       </thead>
                       <tbody>
                         {positions.map(pos => {
-                          const ltp  = positionPrices[pos.symbol] ?? pos.average_price;
-                          const pnl  = (ltp - pos.average_price) * pos.quantity * (pos.side === "buy" ? 1 : -1);
-                          const pnlP = ((ltp - pos.average_price) / pos.average_price) * 100 * (pos.side === "buy" ? 1 : -1);
+                          const ltp    = positionPrices[pos.symbol] ?? pos.average_price;
+                          const pnl    = (ltp - pos.average_price) * pos.quantity * (pos.side === "buy" ? 1 : -1);
+                          const pnlP   = ((ltp - pos.average_price) / pos.average_price) * 100 * (pos.side === "buy" ? 1 : -1);
+                          const health = positionHealth[pos.id];
                           return (
-                            <tr key={pos.id} className="border-b border-border/50 hover:bg-muted/20 transition-colors">
-                              <td className="px-3 py-2">
-                                <div className="flex items-center gap-1.5">
-                                  <span className={`text-[9px] font-bold px-1 rounded ${pos.side === "buy" ? "bg-profit/20 text-profit" : "bg-loss/20 text-loss"}`}>
-                                    {pos.side.toUpperCase()}
-                                  </span>
-                                  <span className="font-medium text-foreground">{pos.symbol}</span>
-                                </div>
-                              </td>
-                              <td className="px-3 py-2 text-right font-data">{pos.quantity}</td>
-                              <td className="px-3 py-2 text-right font-data text-muted-foreground">₹{fmt(pos.average_price)}</td>
-                              <td className="px-3 py-2 text-right font-data font-medium">₹{fmt(ltp)}</td>
-                              <td className={`px-3 py-2 text-right font-data font-semibold ${pnl >= 0 ? "text-profit" : "text-loss"}`}>
-                                {pnl >= 0 ? "+" : "−"}₹{fmt(Math.abs(pnl))}
-                              </td>
-                              <td className={`px-3 py-2 text-right font-data ${pnlP >= 0 ? "text-profit" : "text-loss"}`}>
-                                {fmtP(pnlP)}
-                              </td>
-                              <td className="px-2 py-2">
-                                <button onClick={() => closePosition(pos)}
-                                  disabled={tradeLoading !== null}
-                                  className="text-[10px] px-2 py-0.5 rounded border border-loss/40 text-loss hover:bg-loss/10 transition-colors disabled:opacity-40">
-                                  Close
-                                </button>
-                              </td>
-                            </tr>
+                            <>
+                              <tr key={pos.id} className="hover:bg-muted/20 transition-colors">
+                                <td className="px-3 py-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={`text-[9px] font-bold px-1 rounded ${pos.side === "buy" ? "bg-profit/20 text-profit" : "bg-loss/20 text-loss"}`}>
+                                      {pos.side.toUpperCase()}
+                                    </span>
+                                    <span className="font-medium text-foreground">{pos.symbol}</span>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2 text-right font-data">{pos.quantity}</td>
+                                <td className="px-3 py-2 text-right font-data text-muted-foreground">₹{fmt(pos.average_price)}</td>
+                                <td className="px-3 py-2 text-right font-data font-medium">₹{fmt(ltp)}</td>
+                                <td className={`px-3 py-2 text-right font-data font-semibold ${pnl >= 0 ? "text-profit" : "text-loss"}`}>
+                                  {pnl >= 0 ? "+" : "−"}₹{fmt(Math.abs(pnl))}
+                                </td>
+                                <td className={`px-3 py-2 text-right font-data ${pnlP >= 0 ? "text-profit" : "text-loss"}`}>
+                                  {fmtP(pnlP)}
+                                </td>
+                                <td className="px-2 py-2">
+                                  <button onClick={() => closePosition(pos)}
+                                    disabled={tradeLoading !== null}
+                                    className="text-[10px] px-2 py-0.5 rounded border border-loss/40 text-loss hover:bg-loss/10 transition-colors disabled:opacity-40">
+                                    Close
+                                  </button>
+                                </td>
+                              </tr>
+
+                              {/* ── Greed AI health bar sub-row ── */}
+                              {health && (
+                                <tr key={`${pos.id}-greed`} className="border-b border-border/30">
+                                  <td colSpan={7} className="px-3 pb-2 pt-0">
+                                    <div className="flex items-center gap-2">
+                                      {/* Score pill */}
+                                      <span className={`text-[9px] font-bold font-data shrink-0 ${
+                                        health.status === "healthy" ? "text-profit" :
+                                        health.status === "warning" ? "text-yellow-400" : "text-loss"
+                                      }`}>
+                                        AI {health.score}/100
+                                      </span>
+                                      {/* Bar */}
+                                      <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+                                        <div
+                                          className={`h-full rounded-full transition-all duration-700 ${
+                                            health.status === "healthy" ? "bg-profit" :
+                                            health.status === "warning" ? "bg-yellow-500" : "bg-loss"
+                                          }`}
+                                          style={{ width: `${health.score}%` }}
+                                        />
+                                      </div>
+                                      {/* Market change */}
+                                      {health.changePct !== 0 && (
+                                        <span className={`text-[9px] font-mono shrink-0 ${health.changePct >= 0 ? "text-profit" : "text-loss"}`}>
+                                          {health.changePct >= 0 ? "▲" : "▼"}{Math.abs(health.changePct).toFixed(2)}%
+                                        </span>
+                                      )}
+                                    </div>
+                                    {/* Insight */}
+                                    <p className="text-[9px] text-muted-foreground/70 italic mt-0.5 leading-tight">
+                                      {health.insight}
+                                    </p>
+                                  </td>
+                                </tr>
+                              )}
+                            </>
                           );
                         })}
                       </tbody>
@@ -1116,25 +1357,54 @@ export default function LiveTerminal() {
           </div>
 
           {/* ── RIGHT PANEL (3 cols) ─────────────────────────────────────────── */}
-          <div className="lg:col-span-3 flex flex-col min-h-0">
+          <div className="lg:col-span-3 flex flex-col">
             <div className="flex items-center justify-between mb-2 shrink-0">
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-                <Zap className="w-3 h-3 text-profit" /> Order Log
+                <Zap className="w-3 h-3 text-profit" />
+                Order Log
+                {orderLog.length > 0 && (
+                  <span className="text-[9px] font-normal text-muted-foreground/60 ml-1 normal-case tracking-normal">
+                    ({orderLog.length})
+                  </span>
+                )}
               </span>
-              <button onClick={() => userId && fetchLogs(userId)} className="text-muted-foreground hover:text-foreground transition-colors">
-                <RefreshCw className="w-3 h-3" />
-              </button>
+              <div className="flex items-center gap-2">
+                {userScrolledLogRef.current && (
+                  <button
+                    onClick={() => {
+                      userScrolledLogRef.current = false;
+                      if (logScrollRef.current) logScrollRef.current.scrollTop = 0;
+                    }}
+                    className="text-[9px] text-primary hover:text-primary/80 transition-colors flex items-center gap-0.5"
+                  >
+                    ↑ Latest
+                  </button>
+                )}
+                <button
+                  onClick={() => { if (userId) { userScrolledLogRef.current = false; fetchLogs(userId); } }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                </button>
+              </div>
             </div>
 
-            <Card className="flex-1 overflow-hidden">
-              <CardContent className="p-0 h-full overflow-auto">
+            <Card className="overflow-hidden" style={{ height: "520px" }}>
+              <CardContent className="p-0 h-full">
                 {orderLog.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full text-center p-4 gap-2">
                     <Zap className="w-6 h-6 text-muted-foreground/20" />
                     <p className="text-xs text-muted-foreground">No orders yet</p>
                   </div>
                 ) : (
-                  <div className="divide-y divide-border/50">
+                  <div
+                    ref={logScrollRef}
+                    className="h-full overflow-y-auto divide-y divide-border/50"
+                    onScroll={e => {
+                      // Mark as user-scrolled when they go past the top 40 px
+                      userScrolledLogRef.current = (e.currentTarget.scrollTop > 40);
+                    }}
+                  >
                     {orderLog.map((lg, i) => (
                       <div key={i} className="px-3 py-2 hover:bg-muted/20 transition-colors">
                         <div className="flex items-start gap-1.5">
@@ -1155,7 +1425,6 @@ export default function LiveTerminal() {
                         </div>
                       </div>
                     ))}
-                    <div ref={logEndRef} />
                   </div>
                 )}
               </CardContent>
@@ -1163,6 +1432,7 @@ export default function LiveTerminal() {
           </div>
 
         </div>
+        </div> {/* end scrollable grid wrapper */}
       </div>
     </MainLayout>
   );
