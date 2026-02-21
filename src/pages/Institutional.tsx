@@ -28,7 +28,7 @@ const features = [
 export default function Institutional() {
   return (
     <MainLayout>
-      <div className="flex-1 overflow-y-auto">
+      <div className="h-full overflow-auto">
         {/* Subtle glow background */}
         <div className="relative">
           <div className="absolute inset-0 bg-primary/5 pointer-events-none" />

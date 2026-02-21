@@ -23,7 +23,7 @@ const roles = [
 export default function Careers() {
   return (
     <MainLayout>
-      <div className="flex-1 overflow-y-auto">
+      <div className="h-full overflow-auto">
         {/* Hero */}
         <section className="max-w-3xl mx-auto text-center py-20 px-6">
           <Badge variant="outline" className="mb-4 text-primary border-primary/30">

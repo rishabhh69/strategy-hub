@@ -1924,6 +1924,13 @@ class GreedAIResponse(BaseModel):
     insight:         str
     status:          str    # "healthy" | "warning" | "critical"
     change_percent:  float  # live day-change % of the symbol (for UI display)
+    market_state:    str    # "TRENDING" | "RANGING" | "VOLATILE"
+    vol_z:           float  # simplified volatility z-score proxy
+    # ── Advanced fields ────────────────────────────────────────────────────
+    signal:          str    # "STRONG_BUY" | "BUY" | "HOLD" | "SELL" | "STRONG_SELL"
+    momentum_score:  float  # -100 to +100  (positive = bullish momentum)
+    risk_factor:     float  # 0.0 to 5.0   (0 = low, 5 = extreme)
+    confidence:      int    # 0 – 100  (model confidence in the signal)
 
 
 # Insight templates — include market-trend-aware variants
@@ -2031,10 +2038,65 @@ async def greed_ai_analyze(req: GreedAIRequest):
 
     insight = random.choice(_GREED_INSIGHTS[status])
 
+    # ── 9. Market state — derived from absolute day-change magnitude ──────────
+    abs_chg = abs(change_pct)
+    if abs_chg >= 1.5:
+        market_state = "TRENDING"
+    elif abs_chg <= 0.4:
+        market_state = "RANGING"
+    else:
+        market_state = "VOLATILE"
+
+    # ── 10. Volatility z-score proxy ──────────────────────────────────────────
+    pnl_pct   = abs(req.pnl) / position_value if position_value > 0 else 0.0
+    raw_vol_z = round(pnl_pct * 10 + abs_chg * 0.5, 2)
+    vol_z     = min(round(raw_vol_z, 2), 4.0)             # cap at 4σ
+
+    # ── 11. Advanced: Signal ──────────────────────────────────────────────────
+    # Combines health score, P&L direction, and market trend into one signal
+    market_tailwind = direction * change_pct   # positive = market helps position
+    if health_score >= 72 and req.pnl >= 0 and market_tailwind > 0.5:
+        signal = "STRONG_BUY"
+    elif health_score >= 55 and market_tailwind >= -0.2 and req.pnl >= -abs(position_value * 0.01):
+        signal = "BUY"
+    elif health_score < 22:
+        signal = "STRONG_SELL"
+    elif health_score < 38:
+        signal = "SELL"
+    else:
+        signal = "HOLD"
+
+    # ── 12. Advanced: Momentum Score (-100 → +100) ────────────────────────────
+    # Direction-aware: positive for long+up or short+down; negative otherwise
+    momentum_score = round(
+        max(-100.0, min(100.0,
+            market_tailwind * 12          # market component
+            + pnl_bonus * 0.6             # P&L component
+            + random.uniform(-3.0, 3.0)   # live jitter
+        )),
+        1,
+    )
+
+    # ── 13. Advanced: Risk Factor (0 → 5) ────────────────────────────────────
+    rf = (
+        (pnl_pct * 8 if req.pnl < 0 else 0.0)    # draw-down pressure
+        + abs_chg * 0.3                             # market volatility
+        + (2.0 if health_score < 30 else 0.8 if health_score < 50 else 0.2)  # tier
+        + random.uniform(0.0, 0.3)                  # noise
+    )
+    risk_factor = round(min(5.0, max(0.0, rf)), 2)
+
+    # ── 14. Advanced: Confidence (0 → 100) ───────────────────────────────────
+    # High confidence when health is extreme (very good or very bad)
+    conf_base   = 100 - abs(health_score - 50) * 0.4  # lower at midpoint (50)
+    conf_market = 8 if market_state == "TRENDING" else -6 if market_state == "VOLATILE" else 0
+    confidence  = int(max(0, min(100, conf_base + conf_market + random.uniform(-4, 4))))
+
     print(
         f"[GreedAI] {req.strategy_title} | {req.symbol} "
         f"pnl=₹{req.pnl:+.2f}  chg={change_pct:+.2f}%  "
-        f"score={health_score}  status={status}"
+        f"score={health_score}  signal={signal}  state={market_state}  "
+        f"mom={momentum_score}  risk={risk_factor}  conf={confidence}"
     )
 
     return GreedAIResponse(
@@ -2042,6 +2104,12 @@ async def greed_ai_analyze(req: GreedAIRequest):
         insight=insight,
         status=status,
         change_percent=round(change_pct, 2),
+        market_state=market_state,
+        vol_z=vol_z,
+        signal=signal,
+        momentum_score=momentum_score,
+        risk_factor=risk_factor,
+        confidence=confidence,
     )
 
 

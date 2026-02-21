@@ -80,6 +80,7 @@ export default function StrategyDetail() {
 
   return (
     <MainLayout>
+      <div className="overflow-auto h-full">
       <div className="p-4 md:p-6 max-w-7xl mx-auto">
         {/* Hero */}
         <div className="mb-6">
@@ -220,6 +221,7 @@ export default function StrategyDetail() {
             </div>
           </div>
         </div>
+      </div>
       </div>
     </MainLayout>
   );

@@ -69,8 +69,8 @@ interface PendingOrder {
 }
 
 interface DeployedBot {
-  id:            string;   // strategy id
-  bot_id:        string;   // backend task id (returned by /deploy-bot)
+  id:            string;
+  bot_id:        string;
   strategyTitle: string;
   ticker:        string;
   label:         string;
@@ -82,6 +82,14 @@ interface DeployedBot {
   healthScore?:  number;
   greedInsight?: string;
   healthStatus?: "healthy" | "warning" | "critical";
+  marketState?:  string;
+  volZ?:         number;
+  // Advanced Greed AI
+  signal?:        string;   // STRONG_BUY | BUY | HOLD | SELL | STRONG_SELL
+  momentumScore?: number;   // -100 to +100
+  riskFactor?:    number;   // 0 to 5
+  confidence?:    number;   // 0 to 100
+  changePct?:     number;   // live day change %
 }
 
 // ─── localStorage helpers ─────────────────────────────────────────────────────
@@ -182,8 +190,9 @@ export default function LiveTerminal() {
   const [deploying,     setDeploying]     = useState(false);
 
   // Chart / quote
-  const [chartTicker,  setChartTicker]  = useState("NIFTY");
-  const [livePrice,    setLivePrice]    = useState<number | null>(null);
+  const [chartTicker,   setChartTicker]  = useState("NIFTY");
+  const [chartInterval, setChartInterval] = useState<"1m" | "5m">("5m");
+  const [livePrice,     setLivePrice]   = useState<number | null>(null);
   const [liveChange,   setLiveChange]   = useState(0);
   const [quoteLoading, setQuoteLoading] = useState(false);
 
@@ -214,10 +223,14 @@ export default function LiveTerminal() {
 
   // ── Position-level Greed AI ───────────────────────────────────────────────
   interface PositionHealth {
-    score:     number;
-    status:    "healthy" | "warning" | "critical";
-    insight:   string;
-    changePct: number;
+    score:         number;
+    status:        "healthy" | "warning" | "critical";
+    insight:       string;
+    changePct:     number;
+    signal?:       string;
+    momentumScore?: number;
+    riskFactor?:   number;
+    confidence?:   number;
   }
   const [positionHealth,  setPositionHealth]  = useState<Record<string, PositionHealth>>({});
   const positionCriticalRef = useRef<Set<string>>(new Set());
@@ -464,20 +477,26 @@ export default function LiveTerminal() {
         ) {
           criticalAlertedRef.current.add(bot.bot_id);
           toast.error(
-            `⚠️ Greed AI Alert: "${bot.strategyTitle}" health is critical (${update.health_score}/100). Consider emergency stop.`,
+            `Statistical anomaly detected: "${bot.strategyTitle}" validity dropping. Review parameters.`,
             { duration: 8000 }
           );
         }
-        // Reset alert flag when bot recovers above critical threshold
         if (update.health_score >= 30) {
           criticalAlertedRef.current.delete(bot.bot_id);
         }
 
         return {
           ...bot,
-          healthScore:  update.health_score,
-          greedInsight: update.insight,
-          healthStatus: update.status,
+          healthScore:   update.health_score,
+          greedInsight:  update.insight,
+          healthStatus:  update.status,
+          marketState:   update.market_state,
+          volZ:          update.vol_z,
+          signal:        update.signal,
+          momentumScore: update.momentum_score,
+          riskFactor:    update.risk_factor,
+          confidence:    update.confidence,
+          changePct:     update.change_percent,
         };
       }));
     };
@@ -524,10 +543,14 @@ export default function LiveTerminal() {
       for (const r of results) {
         if (!r) continue;
         next[r.id] = {
-          score:     r.health_score,
-          status:    r.status,
-          insight:   r.insight,
-          changePct: r.change_percent ?? 0,
+          score:         r.health_score,
+          status:        r.status,
+          insight:       r.insight,
+          changePct:     r.change_percent ?? 0,
+          signal:        r.signal,
+          momentumScore: r.momentum_score,
+          riskFactor:    r.risk_factor,
+          confidence:    r.confidence,
         };
 
         // Critical alert — fires once per position, resets when recovered
@@ -1049,87 +1072,252 @@ export default function LiveTerminal() {
                 </div>
               ) : (
                 <div className="space-y-1.5 overflow-auto">
-                  {deployedBots.map(bot => (
-                    <Card key={bot.id} onClick={() => { setSelectedBot(bot); setChartTicker(bot.ticker); }}
-                      className={`cursor-pointer transition-all ${selectedBot?.id === bot.id ? "border-primary bg-primary/5" : "hover:border-border"}`}>
-                      <CardContent className="p-3">
-                        <div className="flex items-start justify-between mb-1.5">
-                          <div className="min-w-0">
-                            <p className="font-medium text-foreground text-xs truncate">{bot.strategyTitle}</p>
-                            <p className="text-[10px] text-muted-foreground">{bot.label} · qty {bot.qty}</p>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <StatusBadge status={bot.status} />
-                            <button
-                              onClick={async e => {
-                                e.stopPropagation();
-                                // Cancel backend worker
-                                if (bot.bot_id) {
-                                  try {
-                                    await fetch(`${API_BASE}/api/paper-trading/stop-bot`, {
-                                      method: "POST", headers: { "Content-Type": "application/json" },
-                                      body: JSON.stringify({ bot_id: bot.bot_id }),
-                                    });
-                                  } catch {}
-                                }
-                                const u = deployedBots.filter(b => b.bot_id !== bot.bot_id);
-                                setDeployedBots(u);
-                                localStorage.setItem("tradeky_bots", JSON.stringify(u));
-                                if (selectedBot?.bot_id === bot.bot_id) setSelectedBot(null);
-                                toast.warning(`Bot "${bot.strategyTitle}" stopped.`);
-                              }}
-                              className="text-muted-foreground hover:text-loss ml-1">
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground">P&amp;L</span>
-                          <span className={`font-data ${bot.pnl >= 0 ? "text-profit" : "text-loss"}`}>
-                            {bot.pnl >= 0 ? "+" : ""}₹{fmt(bot.pnl)}
-                          </span>
-                        </div>
+                  {deployedBots.map(bot => {
+                    const isSelected = selectedBot?.id === bot.id;
+                    const scoreColor =
+                      bot.healthStatus === "healthy" ? "text-profit" :
+                      bot.healthStatus === "warning"  ? "text-yellow-400" : "text-loss";
+                    const barColor =
+                      bot.healthStatus === "healthy" ? "bg-profit" :
+                      bot.healthStatus === "warning"  ? "bg-yellow-500" : "bg-loss";
 
-                        {/* ── Greed AI Health Bar ── */}
-                        {bot.healthScore !== undefined && (
-                          <div className="mt-2 space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="flex items-center gap-1 text-[9px] text-muted-foreground font-semibold uppercase tracking-wide">
-                                <Brain className="w-2.5 h-2.5" />
-                                Greed AI Health
-                              </span>
-                              <span className={`text-[9px] font-bold font-data ${
-                                bot.healthStatus === "healthy"  ? "text-profit"      :
-                                bot.healthStatus === "warning"  ? "text-yellow-400"  :
-                                                                  "text-loss"
-                              }`}>
-                                {bot.healthScore}/100
-                              </span>
+                    return (
+                      <Card
+                        key={bot.id}
+                        onClick={() => {
+                          setSelectedBot(isSelected ? null : bot);
+                          setChartTicker(bot.ticker);
+                        }}
+                        className={`cursor-pointer transition-all duration-200 ${
+                          isSelected ? "border-primary bg-primary/5 shadow-md" : "hover:border-border/80"
+                        }`}
+                      >
+                        <CardContent className="p-3">
+                          {/* ── Top row: title + controls ── */}
+                          <div className="flex items-start justify-between mb-1.5">
+                            <div className="min-w-0">
+                              <p className="font-medium text-foreground text-xs truncate">{bot.strategyTitle}</p>
+                              <p className="text-[10px] text-muted-foreground">{bot.label} · qty {bot.qty}</p>
                             </div>
-
-                            {/* Progress track */}
-                            <div className="w-full h-1 rounded-full bg-muted overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all duration-700 ${
-                                  bot.healthStatus === "healthy"  ? "bg-profit"     :
-                                  bot.healthStatus === "warning"  ? "bg-yellow-500" :
-                                                                    "bg-loss"
-                                }`}
-                                style={{ width: `${bot.healthScore}%` }}
-                              />
+                            <div className="flex items-center gap-1">
+                              <StatusBadge status={bot.status} />
+                              <button
+                                onClick={async e => {
+                                  e.stopPropagation();
+                                  if (bot.bot_id) {
+                                    try {
+                                      await fetch(`${API_BASE}/api/paper-trading/stop-bot`, {
+                                        method: "POST", headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ bot_id: bot.bot_id }),
+                                      });
+                                    } catch {}
+                                  }
+                                  const u = deployedBots.filter(b => b.bot_id !== bot.bot_id);
+                                  setDeployedBots(u);
+                                  localStorage.setItem("tradeky_bots", JSON.stringify(u));
+                                  if (selectedBot?.bot_id === bot.bot_id) setSelectedBot(null);
+                                  toast.warning(`Bot "${bot.strategyTitle}" stopped.`);
+                                }}
+                                className="text-muted-foreground hover:text-loss ml-1">
+                                <X className="w-3 h-3" />
+                              </button>
                             </div>
-
-                            {/* Insight text */}
-                            {bot.greedInsight && (
-                              <p className="text-[9px] text-muted-foreground leading-tight italic">
-                                {bot.greedInsight}
-                              </p>
-                            )}
                           </div>
-                        )}
-                      </CardContent>
-                    </Card>
-                  ))}
+
+                          {/* ── P&L row ── */}
+                          <div className="flex items-center justify-between text-xs mb-1.5">
+                            <span className="text-muted-foreground">P&amp;L</span>
+                            <span className={`font-data font-semibold ${bot.pnl >= 0 ? "text-profit" : "text-loss"}`}>
+                              {bot.pnl >= 0 ? "+" : ""}₹{fmt(bot.pnl)}
+                            </span>
+                          </div>
+
+                          {/* ── Compact Greed AI summary bar (always visible once loaded) ── */}
+                          {bot.healthScore !== undefined && (() => {
+                            const sigColor: Record<string, string> = {
+                              STRONG_BUY:  "text-emerald-400",
+                              BUY:         "text-profit",
+                              HOLD:        "text-yellow-400",
+                              SELL:        "text-orange-400",
+                              STRONG_SELL: "text-loss",
+                            };
+                            const sigBg: Record<string, string> = {
+                              STRONG_BUY:  "bg-emerald-500/20 border-emerald-500/40",
+                              BUY:         "bg-green-500/15 border-green-500/30",
+                              HOLD:        "bg-yellow-500/15 border-yellow-500/30",
+                              SELL:        "bg-orange-500/15 border-orange-500/30",
+                              STRONG_SELL: "bg-red-500/15 border-red-500/30",
+                            };
+                            const sig = bot.signal ?? "HOLD";
+                            return (
+                              <div className="space-y-1">
+                                {/* Signal + score row */}
+                                <div className="flex items-center justify-between">
+                                  <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-mono font-bold tracking-widest ${sigBg[sig] ?? "bg-muted/30 border-border"} ${sigColor[sig] ?? "text-foreground"}`}>
+                                    <Brain className="w-2.5 h-2.5" />
+                                    {sig.replace("_", " ")}
+                                  </div>
+                                  <span className={`text-[9px] font-bold font-data ${scoreColor}`}>
+                                    {bot.healthScore}/100
+                                  </span>
+                                </div>
+                                {/* Bar */}
+                                <div className="w-full h-1 rounded-full bg-muted/60 overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full transition-all duration-700 ${barColor}`}
+                                    style={{ width: `${bot.healthScore}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })()}
+
+                          {/* ── Diagnostics Drawer — expands when bot card is selected ── */}
+                          {isSelected && bot.healthScore !== undefined && (
+                            <div className="mt-3 pt-3 border-t border-border/40 animate-in fade-in slide-in-from-top-2 duration-250">
+
+                              {/* ── Signal banner ── */}
+                              {(() => {
+                                const sig = bot.signal ?? "HOLD";
+                                const bannerBg: Record<string,string> = {
+                                  STRONG_BUY: "bg-emerald-500/15 border-emerald-500/30 text-emerald-300",
+                                  BUY:        "bg-green-500/10  border-green-500/25  text-green-400",
+                                  HOLD:       "bg-yellow-500/10 border-yellow-500/25 text-yellow-300",
+                                  SELL:       "bg-orange-500/10 border-orange-500/25 text-orange-300",
+                                  STRONG_SELL:"bg-red-500/15    border-red-500/30    text-red-300",
+                                };
+                                const cls = bannerBg[sig] ?? "bg-muted/30 border-border text-foreground";
+                                return (
+                                  <div className={`flex items-center justify-between px-2 py-1 rounded-md border mb-2.5 ${cls}`}>
+                                    <span className="text-[10px] font-mono font-bold tracking-widest flex items-center gap-1">
+                                      <Brain className="w-3 h-3" />
+                                      {sig.replace("_", " ")}
+                                    </span>
+                                    <span className="text-[10px] font-mono">
+                                      CONF&nbsp;{bot.confidence ?? "—"}%
+                                    </span>
+                                  </div>
+                                );
+                              })()}
+
+                              {/* ── 3-col grid ── */}
+                              <div className="grid grid-cols-3 gap-2 mb-2.5">
+
+                                {/* Col 1 — Validity */}
+                                <div className="flex flex-col gap-1">
+                                  <p className="text-[9px] text-muted-foreground/60 uppercase tracking-widest font-semibold">Validity</p>
+                                  <div className="flex flex-col items-center gap-0.5">
+                                    <span className={`text-xl font-bold font-data leading-none ${scoreColor}`}>
+                                      {bot.healthScore}
+                                    </span>
+                                    <span className="text-[8px] text-muted-foreground">/ 100</span>
+                                    <div className="w-full h-1.5 rounded-full bg-muted/60 overflow-hidden mt-1">
+                                      <div className={`h-full rounded-full transition-all duration-700 ${barColor}`}
+                                        style={{ width: `${bot.healthScore}%` }} />
+                                    </div>
+                                    <span className={`text-[8px] font-bold mt-0.5 tracking-wider ${scoreColor}`}>
+                                      {bot.healthStatus?.toUpperCase()}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Col 2 — Market Metrics */}
+                                <div className="flex flex-col gap-1">
+                                  <p className="text-[9px] text-muted-foreground/60 uppercase tracking-widest font-semibold">Market</p>
+                                  <div className="font-mono text-[9px] space-y-1.5">
+                                    <div className="flex flex-col">
+                                      <span className="text-muted-foreground/60">State</span>
+                                      <span className={`font-bold ${
+                                        bot.marketState === "TRENDING"  ? "text-profit" :
+                                        bot.marketState === "VOLATILE"  ? "text-yellow-400" :
+                                                                          "text-foreground/70"
+                                      }`}>{bot.marketState ?? "—"}</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                      <span className="text-muted-foreground/60">Vol Z</span>
+                                      <span className={`font-bold ${
+                                        (bot.volZ ?? 0) >= 2   ? "text-loss" :
+                                        (bot.volZ ?? 0) >= 1   ? "text-yellow-400" :
+                                                                  "text-profit"
+                                      }`}>{bot.volZ?.toFixed(2) ?? "—"}σ</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                      <span className="text-muted-foreground/60">Chg</span>
+                                      <span className={`font-bold ${(bot.changePct ?? 0) >= 0 ? "text-profit" : "text-loss"}`}>
+                                        {bot.changePct != null ? `${bot.changePct >= 0 ? "+" : ""}${bot.changePct.toFixed(2)}%` : "—"}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Col 3 — Insight */}
+                                <div className="flex flex-col gap-1">
+                                  <p className="text-[9px] text-muted-foreground/60 uppercase tracking-widest font-semibold">Insight</p>
+                                  <p className="text-[9px] text-muted-foreground leading-tight">
+                                    {bot.greedInsight ?? "Awaiting market data…"}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* ── Momentum + Risk bars ── */}
+                              <div className="grid grid-cols-2 gap-2">
+
+                                {/* Momentum */}
+                                <div>
+                                  <div className="flex justify-between mb-0.5">
+                                    <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wider">Momentum</span>
+                                    <span className={`text-[9px] font-mono font-bold ${
+                                      (bot.momentumScore ?? 0) >= 0 ? "text-profit" : "text-loss"
+                                    }`}>
+                                      {bot.momentumScore != null ? `${bot.momentumScore >= 0 ? "+" : ""}${bot.momentumScore}` : "—"}
+                                    </span>
+                                  </div>
+                                  {/* Bipolar bar centred at 0 */}
+                                  <div className="relative w-full h-1.5 rounded-full bg-muted/60 overflow-hidden">
+                                    {bot.momentumScore != null && (
+                                      bot.momentumScore >= 0 ? (
+                                        <div className="absolute top-0 left-1/2 h-full bg-profit rounded-full transition-all duration-700"
+                                          style={{ width: `${Math.min(50, bot.momentumScore / 2)}%` }} />
+                                      ) : (
+                                        <div className="absolute top-0 h-full bg-loss rounded-full transition-all duration-700"
+                                          style={{ right: "50%", width: `${Math.min(50, Math.abs(bot.momentumScore) / 2)}%` }} />
+                                      )
+                                    )}
+                                    <div className="absolute top-0 left-1/2 w-px h-full bg-border/60" />
+                                  </div>
+                                </div>
+
+                                {/* Risk Factor */}
+                                <div>
+                                  <div className="flex justify-between mb-0.5">
+                                    <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wider">Risk</span>
+                                    <span className={`text-[9px] font-mono font-bold ${
+                                      (bot.riskFactor ?? 0) >= 3.5 ? "text-loss" :
+                                      (bot.riskFactor ?? 0) >= 2   ? "text-yellow-400" :
+                                                                      "text-profit"
+                                    }`}>
+                                      {bot.riskFactor != null ? `${bot.riskFactor.toFixed(1)}/5` : "—"}
+                                    </span>
+                                  </div>
+                                  <div className="w-full h-1.5 rounded-full bg-muted/60 overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full transition-all duration-700 ${
+                                        (bot.riskFactor ?? 0) >= 3.5 ? "bg-loss" :
+                                        (bot.riskFactor ?? 0) >= 2   ? "bg-yellow-500" : "bg-profit"
+                                      }`}
+                                      style={{ width: `${((bot.riskFactor ?? 0) / 5) * 100}%` }}
+                                    />
+                                  </div>
+                                </div>
+
+                              </div>
+                            </div>
+                          )}
+
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1144,7 +1332,22 @@ export default function LiveTerminal() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <CardTitle className="text-sm font-medium">{chartLabel}</CardTitle>
-                    <Badge variant="secondary" className="font-mono text-[10px]">5m</Badge>
+                    {/* 1m / 5m interval toggle */}
+                    <div className="flex items-center rounded-md border border-border overflow-hidden">
+                      {(["1m", "5m"] as const).map(iv => (
+                        <button
+                          key={iv}
+                          onClick={() => setChartInterval(iv)}
+                          className={`px-2 py-0.5 text-[10px] font-mono font-semibold transition-colors ${
+                            chartInterval === iv
+                              ? "bg-primary text-primary-foreground"
+                              : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                          }`}
+                        >
+                          {iv}
+                        </button>
+                      ))}
+                    </div>
                     <Badge variant={marketOpen ? "default" : "outline"} className="text-[10px]">
                       {marketOpen ? "Live" : "Closed"}
                     </Badge>
@@ -1163,7 +1366,13 @@ export default function LiveTerminal() {
                 </div>
               </CardHeader>
               <CardContent className="flex-1 p-2 min-h-0 overflow-hidden">
-                <TradingViewChart key={chartTicker} ticker={chartTicker} pollInterval={15_000} height={270} />
+                <TradingViewChart
+                  key={`${chartTicker}-${chartInterval}`}
+                  ticker={chartTicker}
+                  interval={chartInterval}
+                  pollInterval={15_000}
+                  height={270}
+                />
               </CardContent>
             </Card>
 
@@ -1258,20 +1467,33 @@ export default function LiveTerminal() {
                                 </td>
                               </tr>
 
-                              {/* ── Greed AI health bar sub-row ── */}
+                              {/* ── Greed AI sub-row (advanced) ── */}
                               {health && (
-                                <tr key={`${pos.id}-greed`} className="border-b border-border/30">
-                                  <td colSpan={7} className="px-3 pb-2 pt-0">
-                                    <div className="flex items-center gap-2">
-                                      {/* Score pill */}
-                                      <span className={`text-[9px] font-bold font-data shrink-0 ${
-                                        health.status === "healthy" ? "text-profit" :
-                                        health.status === "warning" ? "text-yellow-400" : "text-loss"
-                                      }`}>
-                                        AI {health.score}/100
-                                      </span>
+                                <tr key={`${pos.id}-greed`} className="border-b border-border/20">
+                                  <td colSpan={7} className="px-3 pb-2.5 pt-0">
+                                    {/* Row 1: signal badge + bar + score + chg */}
+                                    <div className="flex items-center gap-2 mb-0.5">
+                                      {/* Signal */}
+                                      {health.signal && (() => {
+                                        const sigColor: Record<string,string> = {
+                                          STRONG_BUY:"text-emerald-400", BUY:"text-profit",
+                                          HOLD:"text-yellow-400", SELL:"text-orange-400", STRONG_SELL:"text-loss",
+                                        };
+                                        const sigBg: Record<string,string> = {
+                                          STRONG_BUY:"bg-emerald-500/15 border-emerald-500/30",
+                                          BUY:"bg-green-500/10 border-green-500/25",
+                                          HOLD:"bg-yellow-500/10 border-yellow-500/25",
+                                          SELL:"bg-orange-500/10 border-orange-500/25",
+                                          STRONG_SELL:"bg-red-500/10 border-red-500/25",
+                                        };
+                                        return (
+                                          <span className={`text-[8px] font-mono font-bold px-1.5 py-px rounded border shrink-0 ${sigBg[health.signal]??""} ${sigColor[health.signal]??""}`}>
+                                            {health.signal.replace("_"," ")}
+                                          </span>
+                                        );
+                                      })()}
                                       {/* Bar */}
-                                      <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+                                      <div className="flex-1 h-1 rounded-full bg-muted/60 overflow-hidden">
                                         <div
                                           className={`h-full rounded-full transition-all duration-700 ${
                                             health.status === "healthy" ? "bg-profit" :
@@ -1280,15 +1502,44 @@ export default function LiveTerminal() {
                                           style={{ width: `${health.score}%` }}
                                         />
                                       </div>
-                                      {/* Market change */}
+                                      {/* Score */}
+                                      <span className={`text-[9px] font-bold font-mono shrink-0 ${
+                                        health.status === "healthy" ? "text-profit" :
+                                        health.status === "warning" ? "text-yellow-400" : "text-loss"
+                                      }`}>{health.score}/100</span>
+                                      {/* Chg */}
                                       {health.changePct !== 0 && (
                                         <span className={`text-[9px] font-mono shrink-0 ${health.changePct >= 0 ? "text-profit" : "text-loss"}`}>
                                           {health.changePct >= 0 ? "▲" : "▼"}{Math.abs(health.changePct).toFixed(2)}%
                                         </span>
                                       )}
+                                      {/* Confidence */}
+                                      {health.confidence != null && (
+                                        <span className="text-[8px] font-mono text-muted-foreground/50 shrink-0">
+                                          {health.confidence}% conf
+                                        </span>
+                                      )}
                                     </div>
-                                    {/* Insight */}
-                                    <p className="text-[9px] text-muted-foreground/70 italic mt-0.5 leading-tight">
+                                    {/* Row 2: momentum + risk */}
+                                    {(health.momentumScore != null || health.riskFactor != null) && (
+                                      <div className="flex items-center gap-3 mb-0.5">
+                                        {health.momentumScore != null && (
+                                          <span className={`text-[8px] font-mono ${health.momentumScore >= 0 ? "text-profit" : "text-loss"}`}>
+                                            MOM {health.momentumScore >= 0 ? "+" : ""}{health.momentumScore}
+                                          </span>
+                                        )}
+                                        {health.riskFactor != null && (
+                                          <span className={`text-[8px] font-mono ${
+                                            health.riskFactor >= 3.5 ? "text-loss" :
+                                            health.riskFactor >= 2   ? "text-yellow-400" : "text-muted-foreground"
+                                          }`}>
+                                            RISK {health.riskFactor.toFixed(1)}/5
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
+                                    {/* Row 3: insight */}
+                                    <p className="text-[9px] text-muted-foreground/60 leading-tight">
                                       {health.insight}
                                     </p>
                                   </td>
