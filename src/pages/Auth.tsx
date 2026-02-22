@@ -1,11 +1,51 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Eye, EyeOff, Mail, Lock, User } from "lucide-react";
+import { Eye, EyeOff, Mail, Lock, User, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+
+function ResendConfirmationButton({ email, callbackUrl }: { email: string; callbackUrl: string }) {
+  const [loading, setLoading] = useState(false);
+  const handleResend = async () => {
+    if (!email) return;
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: { emailRedirectTo: callbackUrl },
+      });
+      if (error) throw error;
+      toast.success("Confirmation email sent again. Check your inbox and spam.");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to resend email.");
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="w-full text-muted-foreground"
+      onClick={handleResend}
+      disabled={loading}
+    >
+      {loading ? (
+        "Sending…"
+      ) : (
+        <>
+          <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+          Resend confirmation email
+        </>
+      )}
+    </Button>
+  );
+}
 
 export default function Auth() {
   const [isLogin, setIsLogin] = useState(true);
@@ -161,9 +201,12 @@ export default function Auth() {
                   : "After confirming, come back here and sign in."}
               </p>
               {signUpSuccess && (
-                <p className="text-[10px] text-muted-foreground/80 text-center max-w-sm mx-auto">
-                  If the confirmation link sends you to the wrong site, in Supabase Dashboard go to Authentication → URL Configuration: set <strong>Site URL</strong> to your app (e.g. your Vercel URL) and add <strong>{callbackUrl}</strong> to Redirect URLs.
-                </p>
+                <>
+                  <p className="text-[11px] text-muted-foreground/90 text-center">
+                    Didn’t get the email? Check your spam folder, or resend below.
+                  </p>
+                  <ResendConfirmationButton email={email} callbackUrl={callbackUrl} />
+                </>
               )}
               <Button
                 type="button"
