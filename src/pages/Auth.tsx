@@ -14,35 +14,55 @@ export default function Auth() {
   const [username, setUsername] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [signUpSuccess, setSignUpSuccess] = useState(false);
+  const [signInUnconfirmed, setSignInUnconfirmed] = useState(false);
   const navigate = useNavigate();
-  
+
+  const callbackUrl = `${window.location.origin}/auth/callback`;
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
+    setSignUpSuccess(false);
+    setSignInUnconfirmed(false);
+
     try {
       if (isLogin) {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
-        
+
         if (error) throw error;
+        const user = data.user;
+        if (user && !user.email_confirmed_at) {
+          await supabase.auth.signOut();
+          setSignInUnconfirmed(true);
+          setLoading(false);
+          return;
+        }
         toast.success("Welcome back!");
         navigate("/strategy-studio");
       } else {
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            emailRedirectTo: window.location.origin,
-            data: {
-              username,
-            },
+            emailRedirectTo: callbackUrl,
+            data: { username },
           },
         });
-        
+
         if (error) throw error;
+        const user = data.user;
+        const session = data.session;
+        const needsConfirmation = user && !user.email_confirmed_at;
+        if (needsConfirmation || !session) {
+          await supabase.auth.signOut();
+          setSignUpSuccess(true);
+          setLoading(false);
+          return;
+        }
         toast.success("Account created! Welcome to Tradeky.");
         navigate("/strategy-studio");
       }
@@ -112,15 +132,48 @@ export default function Auth() {
           {/* Form Header */}
           <div className="text-center">
             <h2 className="text-2xl font-semibold text-foreground">
-              {isLogin ? "Welcome back" : "Create account"}
+              {signUpSuccess
+                ? "Check your email"
+                : signInUnconfirmed
+                  ? "Confirm your email first"
+                  : isLogin
+                    ? "Welcome back"
+                    : "Create account"}
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
-              {isLogin 
-                ? "Enter your credentials to access your account" 
-                : "Start building strategies in minutes"}
+              {signUpSuccess
+                ? `We sent a confirmation link to ${email}. Click it to activate your account, then you’ll be redirected to Tradeky.`
+                : signInUnconfirmed
+                  ? "Your account is not activated yet. Click the confirmation link we sent to your email, then sign in again."
+                  : isLogin
+                    ? "Enter your credentials to access your account"
+                    : "Start building strategies in minutes"}
             </p>
           </div>
-          
+
+          {(signUpSuccess || signInUnconfirmed) && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground text-center">
+                {signUpSuccess
+                  ? "You can close this page. After confirming, open Tradeky again and sign in."
+                  : "After confirming, come back here and sign in."}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  setSignUpSuccess(false);
+                  setSignInUnconfirmed(false);
+                }}
+              >
+                Back to sign in
+              </Button>
+            </div>
+          )}
+
+          {!signUpSuccess && !signInUnconfirmed && (
+          <>
           {/* Form */}
           <form onSubmit={handleAuth} className="space-y-4">
             {!isLogin && (
@@ -188,7 +241,7 @@ export default function Auth() {
               {loading ? "Loading..." : isLogin ? "Sign In" : "Create Account"}
             </Button>
           </form>
-          
+
           {/* Toggle */}
           <p className="text-center text-sm text-muted-foreground">
             {isLogin ? "Don't have an account? " : "Already have an account? "}
@@ -200,6 +253,8 @@ export default function Auth() {
               {isLogin ? "Sign up" : "Sign in"}
             </button>
           </p>
+          </>
+          )}
         </div>
       </div>
     </div>
