@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useLocation } from "react-router-dom";
 import { Button }    from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge }     from "@/components/ui/badge";
@@ -198,6 +199,8 @@ export default function LiveTerminal() {
   const [deployTicker,  setDeployTicker]  = useState("NIFTY");
   const [deployQty,     setDeployQty]     = useState(50);
   const [deploying,     setDeploying]     = useState(false);
+  const [inlineStrategy, setInlineStrategy] = useState<{ title: string; logicText: string } | null>(null);
+  const location = useLocation();
 
   // Chart / quote
   const [chartTicker,   setChartTicker]  = useState("NIFTY");
@@ -258,6 +261,14 @@ export default function LiveTerminal() {
       .order("created_at", { ascending: false }).limit(20)
       .then(({ data, error }) => { if (!error && data) setStrategies(data as Strategy[]); });
   }, []);
+
+  // ── 2b. Strategy passed from Strategy Studio (no Supabase save) ───────────────
+  useEffect(() => {
+    const state = location.state as { fromStudio?: boolean; title?: string; logicText?: string } | null;
+    if (state?.fromStudio && state?.logicText) {
+      setInlineStrategy({ title: state.title || "Backtest strategy", logicText: state.logicText });
+    }
+  }, [location.state]);
 
   // ── 3. Restore deployed bots ─────────────────────────────────────────────────
   useEffect(() => {
@@ -726,21 +737,33 @@ export default function LiveTerminal() {
 
   // ── Deploy Bot ────────────────────────────────────────────────────────────────
   const deployBot = async () => {
-    const strat = strategies.find(s => s.id === deployStratId);
-    if (!strat || !userId) return;
+    const useInline = inlineStrategy?.logicText && userId;
+    const strat = useInline ? null : strategies.find(s => s.id === deployStratId);
+    if (!useInline && (!strat || !userId)) return;
     if (backendOnline === false) { toast.error("Backend offline."); return; }
     setDeploying(true);
     try {
-      // 1. Register on backend — backend fetches code from Supabase and launches worker
+      const title = useInline ? inlineStrategy!.title : strat!.title;
+      const body = useInline
+        ? {
+            user_id:            userId,
+            strategy_id:        "",
+            symbol:             deployTicker,
+            quantity:           deployQty,
+            title,
+            inline_logic_text:  inlineStrategy!.logicText,
+          }
+        : {
+            user_id:     userId,
+            strategy_id: strat!.id,
+            symbol:      deployTicker,
+            quantity:    deployQty,
+            title:       strat!.title,
+          };
+
       const res = await fetch(`${API_BASE}/api/paper-trading/deploy-bot`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id:     userId,
-          strategy_id: strat.id,
-          symbol:      deployTicker,
-          quantity:    deployQty,
-          title:       strat.title,
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -749,12 +772,11 @@ export default function LiveTerminal() {
       const data = await res.json();
       const bot_id = data.bot_id as string;
 
-      // 2. Update local UI state with the backend bot_id
       const label = TICKERS.find(t => t.value === deployTicker)?.label ?? deployTicker;
       const bot: DeployedBot = {
-        id:            strat.id,
+        id:            useInline ? "inline" : strat!.id,
         bot_id,
-        strategyTitle: strat.title,
+        strategyTitle: title,
         ticker:        deployTicker,
         label,
         status:        "scanning",
@@ -773,7 +795,8 @@ export default function LiveTerminal() {
         time: now, type: "system",
         message: `Bot deployed: "${strat.title}" on ${label}  qty ${deployQty}  (${bot_id.slice(0, 16)}…)`,
       }, ...prev]);
-      toast.success(`Bot "${strat.title}" is live on ${label}. Checking every 60 s.`);
+      toast.success(`Bot "${title}" is live on ${label}. Checking every 60 s.`);
+      if (useInline) setInlineStrategy(null);
     } catch (err: any) {
       toast.error(err.message ?? "Failed to deploy bot");
     } finally {
@@ -1019,14 +1042,20 @@ export default function LiveTerminal() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-3 space-y-2">
-                <Select value={deployStratId} onValueChange={setDeployStratId}>
-                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select a strategy…" /></SelectTrigger>
-                  <SelectContent>
-                    {strategies.length === 0
-                      ? <div className="p-3 text-xs text-muted-foreground text-center">No strategies. Create one in Strategy Studio.</div>
-                      : strategies.map(s => <SelectItem key={s.id} value={s.id} className="text-xs">{s.title}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                {inlineStrategy ? (
+                  <div className="rounded-md bg-primary/10 border border-primary/30 px-2.5 py-2 text-xs text-foreground">
+                    <span className="font-medium">From Strategy Studio:</span> {inlineStrategy.title}
+                  </div>
+                ) : (
+                  <Select value={deployStratId} onValueChange={setDeployStratId}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select a strategy…" /></SelectTrigger>
+                    <SelectContent>
+                      {strategies.length === 0
+                        ? <div className="p-3 text-xs text-muted-foreground text-center">No strategies. Create one in Strategy Studio.</div>
+                        : strategies.map(s => <SelectItem key={s.id} value={s.id} className="text-xs">{s.title}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                )}
 
                 <div className="grid grid-cols-2 gap-2">
                   <Select value={deployTicker} onValueChange={setDeployTicker}>
@@ -1041,7 +1070,7 @@ export default function LiveTerminal() {
                     className="bg-background border border-border rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary" />
                 </div>
 
-                <Button size="sm" className="w-full h-8 text-xs" disabled={!deployStratId || deploying} onClick={deployBot}>
+                <Button size="sm" className="w-full h-8 text-xs" disabled={(!deployStratId && !inlineStrategy) || !userId || deploying} onClick={deployBot}>
                   {deploying ? <RefreshCw className="w-3 h-3 animate-spin mr-1" /> : <Plus className="w-3 h-3 mr-1" />}
                   Deploy Paper Bot
                 </Button>

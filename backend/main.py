@@ -1200,11 +1200,12 @@ class PaperRestoreRequest(BaseModel):
 
 class DeployBotRequest(BaseModel):
     model_config = _STRICT
-    user_id:     str = Field(..., min_length=1, max_length=128)
-    strategy_id: str = Field(..., min_length=1, max_length=64)
-    symbol:      str = Field(..., min_length=1, max_length=32)
-    quantity:    int = Field(..., ge=1, le=1_000_000)
-    title:       str = Field(default="", max_length=256)
+    user_id:            str = Field(..., min_length=1, max_length=128)
+    strategy_id:        str = Field(default="", max_length=64)  # optional when inline_logic_text set
+    symbol:             str = Field(..., min_length=1, max_length=32)
+    quantity:           int = Field(..., ge=1, le=1_000_000)
+    title:              str = Field(default="", max_length=256)
+    inline_logic_text:  str = Field(default="", max_length=100_000)  # from Strategy Studio when Supabase save skipped
 
     @field_validator("user_id")
     @classmethod
@@ -1942,37 +1943,43 @@ async def bot_worker(
 # ---------------------------------------------------------------------------
 @app.post("/api/paper-trading/deploy-bot")
 async def deploy_bot(req: DeployBotRequest):
-    if not req.user_id or not req.strategy_id:
-        raise HTTPException(400, "user_id and strategy_id are required")
+    if not req.user_id:
+        raise HTTPException(400, "user_id is required")
     if req.quantity < 1:
         raise HTTPException(400, "quantity must be >= 1")
 
-    # ── 1. Fetch strategy code from Supabase ──────────────────────────────────
-    strategy_code = ""
-    strategy_title = req.title or req.strategy_id
+    # ── 1. Resolve strategy code: inline (from Strategy Studio) or from Supabase ─
+    strategy_code  = (req.inline_logic_text or "").strip()
+    strategy_title = (req.title or "").strip() or "Strategy"
+    strategy_id    = req.strategy_id.strip() or "inline"
 
-    if _sb_ok():
-        rows = _sb_get("strategies", {"id": f"eq.{req.strategy_id}"})
-        if not rows:
-            raise HTTPException(404, f"Strategy '{req.strategy_id}' not found in Supabase.")
-        row = rows[0]
-        strategy_code  = row.get("logic_text", "") or ""
-        strategy_title = row.get("title", req.title or req.strategy_id)
+    if strategy_code:
+        # Deploy from Strategy Studio without saving to Supabase
+        pass
+    elif strategy_id and strategy_id != "inline":
+        if _sb_ok():
+            rows = _sb_get("strategies", {"id": f"eq.{strategy_id}"})
+            if not rows:
+                raise HTTPException(404, f"Strategy '{strategy_id}' not found in Supabase.")
+            row = rows[0]
+            strategy_code  = row.get("logic_text", "") or ""
+            strategy_title = row.get("title", req.title or strategy_id) or strategy_title
+        else:
+            raise HTTPException(503, "Supabase is unreachable. Cannot fetch strategy code.")
     else:
-        # Supabase unreachable — frontend must have passed the code; not supported
-        raise HTTPException(503, "Supabase is unreachable. Cannot fetch strategy code.")
+        raise HTTPException(400, "Provide either strategy_id (saved strategy) or inline_logic_text (from Strategy Studio).")
 
     if not strategy_code.strip():
         raise HTTPException(400, "Strategy has no executable code (logic_text is empty).")
 
     # ── 2. Generate a unique bot_id ───────────────────────────────────────────
-    bot_id = f"bot_{req.user_id[:8]}_{req.strategy_id[:8]}_{int(time.time())}"
+    bot_id = f"bot_{req.user_id[:8]}_{strategy_id[:8]}_{int(time.time())}"
 
     # Stop any existing bot for the same user + strategy + symbol
     old_id = next(
         (bid for bid, meta in _BOT_META.items()
          if meta["user_id"] == req.user_id
-         and meta["strategy_id"] == req.strategy_id
+         and meta["strategy_id"] == strategy_id
          and meta["symbol"] == req.symbol.upper()),
         None,
     )
@@ -1983,7 +1990,7 @@ async def deploy_bot(req: DeployBotRequest):
     # ── 3. Store metadata ─────────────────────────────────────────────────────
     _BOT_META[bot_id] = {
         "user_id":     req.user_id,
-        "strategy_id": req.strategy_id,
+        "strategy_id": strategy_id,
         "symbol":      req.symbol.upper(),
         "quantity":    req.quantity,
         "title":       strategy_title,
@@ -1994,7 +2001,7 @@ async def deploy_bot(req: DeployBotRequest):
 
     # ── 4. Launch background task ─────────────────────────────────────────────
     task = asyncio.create_task(
-        bot_worker(bot_id, req.user_id, strategy_code, req.symbol, req.quantity, req.strategy_id)
+        bot_worker(bot_id, req.user_id, strategy_code, req.symbol, req.quantity, strategy_id)
     )
     _RUNNING_BOTS[bot_id] = task
 
