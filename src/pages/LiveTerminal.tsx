@@ -251,7 +251,8 @@ export default function LiveTerminal() {
   // ── 1. Resolve user ─────────────────────────────────────────────────────────
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
-      setUserId(data.user?.id ?? getDemoUserId());
+      const id = data.user?.id?.trim();
+      setUserId(id && id.length > 0 ? id : getDemoUserId());
     });
   }, []);
 
@@ -737,26 +738,36 @@ export default function LiveTerminal() {
 
   // ── Deploy Bot ────────────────────────────────────────────────────────────────
   const deployBot = async () => {
-    const useInline = inlineStrategy?.logicText && userId;
+    const uid = (userId || "").trim();
+    const symbol = (deployTicker || "").trim();
+    if (!uid) {
+      toast.error("Please sign in or refresh the page.");
+      return;
+    }
+    if (!symbol) {
+      toast.error("Please select a symbol.");
+      return;
+    }
+    const useInline = inlineStrategy?.logicText && uid;
     const strat = useInline ? null : strategies.find(s => s.id === deployStratId);
-    if (!useInline && (!strat || !userId)) return;
+    if (!useInline && (!strat || !uid)) return;
     if (backendOnline === false) { toast.error("Backend offline."); return; }
     setDeploying(true);
     try {
       const title = useInline ? inlineStrategy!.title : strat!.title;
       const body = useInline
         ? {
-            user_id:            userId,
+            user_id:            uid,
             strategy_id:        "",
-            symbol:             deployTicker,
+            symbol:             symbol,
             quantity:           deployQty,
             title,
             inline_logic_text:  inlineStrategy!.logicText,
           }
         : {
-            user_id:     userId,
+            user_id:     uid,
             strategy_id: strat!.id,
-            symbol:      deployTicker,
+            symbol:      symbol,
             quantity:    deployQty,
             title:       strat!.title,
           };
@@ -793,7 +804,7 @@ export default function LiveTerminal() {
       const now = new Date().toLocaleTimeString("en-IN", { hour12: false });
       setOrderLog(prev => [{
         time: now, type: "system",
-        message: `Bot deployed: "${strat.title}" on ${label}  qty ${deployQty}  (${bot_id.slice(0, 16)}…)`,
+        message: `Bot deployed: "${title}" on ${label}  qty ${deployQty}  (${bot_id.slice(0, 16)}…)`,
       }, ...prev]);
       toast.success(`Bot "${title}" is live on ${label}. Checking every 60 s.`);
       if (useInline) setInlineStrategy(null);
