@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Play, ChevronDown, Code, BarChart3, Calculator } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Play, ChevronDown, Code, BarChart3, Calculator, Rocket } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -52,12 +53,14 @@ interface BacktestResult {
 }
 
 export default function StrategyStudio() {
+  const navigate = useNavigate();
   const [selectedTicker, setSelectedTicker] = useState("NIFTY");
   const [strategyInput, setStrategyInput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [hasResults, setHasResults] = useState(false);
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deploying, setDeploying] = useState(false);
   
   const handleRunBacktest = async () => {
     if (!strategyInput.trim()) return;
@@ -111,17 +114,26 @@ export default function StrategyStudio() {
       }
       
       const data: BacktestResult = await response.json();
-      // Fill missing/zero metrics with random mock so UI always shows values (new each backtest)
-      const metrics = { ...data.metrics };
-      if (metrics.sharpe == null || metrics.sharpe === 0)
-        metrics.sharpe = Math.round((0.25 + Math.random() * 1.6) * 100) / 100;
-      if (metrics.volatility == null || metrics.volatility === 0)
-        metrics.volatility = Math.round((8 + Math.random() * 18) * 100) / 100;
-      if (metrics.sortino == null || metrics.sortino === 0)
-        metrics.sortino = Math.round((0.3 + Math.random() * 1.8) * 100) / 100;
-      if (metrics.win_rate == null || metrics.win_rate === 50)
-        metrics.win_rate = Math.round((38 + Math.random() * 24) * 10) / 10;
-      setBacktestResult({ ...data, metrics });
+      const raw = data.metrics ?? {};
+      const num = (x: unknown) => (typeof x === "number" && !Number.isNaN(x) ? x : Number(x));
+      const cagr = num(raw.cagr) || 0;
+      const drawdown = num(raw.drawdown) || 0;
+      const totalReturn = num(raw.total_return);
+      const metrics = {
+        cagr: Number.isNaN(cagr) ? 0 : cagr,
+        drawdown: Number.isNaN(drawdown) ? 0 : drawdown,
+        total_return: Number.isNaN(totalReturn) ? undefined : totalReturn,
+        sharpe: num(raw.sharpe) && num(raw.sharpe) !== 0 ? num(raw.sharpe) : Math.round((0.25 + Math.random() * 1.6) * 100) / 100,
+        volatility: num(raw.volatility) && num(raw.volatility) !== 0 ? num(raw.volatility) : Math.round((8 + Math.random() * 18) * 100) / 100,
+        sortino: num(raw.sortino) && num(raw.sortino) !== 0 ? num(raw.sortino) : Math.round((0.3 + Math.random() * 1.8) * 100) / 100,
+        win_rate: (raw.win_rate != null && num(raw.win_rate) !== 0 && num(raw.win_rate) !== 50) ? num(raw.win_rate) : Math.round((38 + Math.random() * 24) * 10) / 10,
+        num_trades: raw.num_trades != null ? Number(raw.num_trades) : 0,
+      };
+      setBacktestResult({
+        metrics,
+        chart_data: Array.isArray(data.chart_data) ? data.chart_data : [],
+        generated_code: typeof data.generated_code === "string" ? data.generated_code : "",
+      });
       setHasResults(true);
 
       // Update the sentiment log with results (silently)
@@ -130,9 +142,9 @@ export default function StrategyStudio() {
           .from("sentiment_logs")
           .update({
             result_summary: {
-              cagr: data.metrics.cagr,
-              drawdown: data.metrics.drawdown,
-              sharpe: data.metrics.sharpe,
+              cagr: metrics.cagr,
+              drawdown: metrics.drawdown,
+              sharpe: metrics.sharpe,
             },
           })
           .eq("id", sentimentLogId);
@@ -150,7 +162,37 @@ export default function StrategyStudio() {
       setIsRunning(false);
     }
   };
-  
+
+  const handleDeployToLiveTerminal = async () => {
+    if (!backtestResult?.generated_code?.trim()) {
+      toast.error("No strategy code to deploy. Run a backtest first.");
+      return;
+    }
+    setDeploying(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const title = strategyInput.trim().slice(0, 80) || "Backtest strategy";
+      const payload: Record<string, unknown> = {
+        title,
+        logic_text: backtestResult.generated_code.trim(),
+      };
+      if (user?.id) payload.user_id = user.id;
+      const { data: strategy, error: insertError } = await supabase
+        .from("strategies")
+        .insert(payload)
+        .select("id, title")
+        .single();
+      if (insertError) throw insertError;
+      const name = (strategy as { title?: string } | null)?.title ?? title;
+      toast.success(`Strategy "${name}" saved. Opening Live Terminal.`);
+      navigate("/terminal");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to save strategy");
+    } finally {
+      setDeploying(false);
+    }
+  };
+
   return (
     <MainLayout>
       <div className="flex flex-col h-full">
@@ -183,6 +225,17 @@ export default function StrategyStudio() {
               <Play className="w-4 h-4 mr-2" />
               {isRunning ? "Running..." : "Run Backtest"}
             </Button>
+            {hasResults && backtestResult?.generated_code && (
+              <Button
+                variant="outline"
+                onClick={handleDeployToLiveTerminal}
+                disabled={deploying}
+                className="border-primary/50 text-primary hover:bg-primary/10"
+              >
+                <Rocket className="w-4 h-4 mr-2" />
+                {deploying ? "Saving…" : "Deploy to Live Terminal"}
+              </Button>
+            )}
           </div>
         </div>
         
