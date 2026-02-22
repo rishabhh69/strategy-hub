@@ -19,10 +19,18 @@ import { toast } from "sonner";
 import { API_BASE } from "@/lib/api";
 
 const tickers = [
+  { value: "NIFTY", label: "Nifty 50" },
+  { value: "BANKNIFTY", label: "Bank Nifty" },
+  { value: "SENSEX", label: "Sensex" },
   { value: "RELIANCE", label: "RELIANCE.NS" },
-  { value: "BAJFINANCE", label: "BAJFINANCE.NS" },
-  { value: "HDFCBANK", label: "HDFCBANK.NS" },
   { value: "TCS", label: "TCS.NS" },
+  { value: "HDFCBANK", label: "HDFCBANK.NS" },
+  { value: "INFY", label: "INFY.NS" },
+  { value: "ICICIBANK", label: "ICICIBANK.NS" },
+  { value: "BAJFINANCE", label: "BAJFINANCE.NS" },
+  { value: "WIPRO", label: "WIPRO.NS" },
+  { value: "TATAMOTORS", label: "TATAMOTORS.NS" },
+  { value: "SBIN", label: "SBIN.NS" },
 ];
 
 interface BacktestResult {
@@ -44,7 +52,7 @@ interface BacktestResult {
 }
 
 export default function StrategyStudio() {
-  const [selectedTicker, setSelectedTicker] = useState("RELIANCE");
+  const [selectedTicker, setSelectedTicker] = useState("NIFTY");
   const [strategyInput, setStrategyInput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [hasResults, setHasResults] = useState(false);

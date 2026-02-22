@@ -170,11 +170,13 @@ CANDLE_TTL = 120   # seconds
 # Ticker normalisation
 # ---------------------------------------------------------------------------
 _INDEX_MAP = {
-    "NIFTY":      "^NSEI",
-    "NIFTY 50":   "^NSEI",
-    "NIFTY50":    "^NSEI",
-    "BANKNIFTY":  "^NSEBANK",
-    "BANK NIFTY": "^NSEBANK",
+    "NIFTY":       "^NSEI",
+    "NIFTY 50":    "^NSEI",
+    "NIFTY50":     "^NSEI",
+    "BANKNIFTY":   "^NSEBANK",
+    "BANK NIFTY":  "^NSEBANK",
+    "SENSEX":      "^BSESN",
+    "BSE SENSEX":  "^BSESN",
 }
 
 

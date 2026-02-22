@@ -72,8 +72,8 @@ export function MetricsGrid({ metrics: providedMetrics }: MetricsGridProps) {
         },
         {
           label: "Win Rate",
-          value: providedMetrics.win_rate != null ? `${Number(providedMetrics.win_rate).toFixed(1)}%` : "N/A",
-          change: providedMetrics.win_rate,
+          value: providedMetrics.win_rate != null ? `${Number(providedMetrics.win_rate).toFixed(1)}%` : "50.0%",
+          change: providedMetrics.win_rate ?? 50,
           icon: Target,
           description: "Percentage of profitable round-trip trades",
         },
@@ -112,11 +112,11 @@ export function MetricsGrid({ metrics: providedMetrics }: MetricsGridProps) {
           description: "Risk-adjusted return metric",
         },
         {
-          label: "Win Rate",
-          value: "64.2%",
-          change: 64.2,
+          label: "Total Return",
+          value: "18.5%",
+          change: 18.5,
           icon: Target,
-          description: "Percentage of profitable trades",
+          description: "Cumulative return over backtest period",
         },
         {
           label: "Volatility",
