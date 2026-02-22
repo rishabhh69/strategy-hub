@@ -98,6 +98,19 @@ export default function Auth() {
         });
 
         if (error) throw error;
+        // Persist sign-up username to profiles so it appears in Settings and Community.
+        const uid = data.user?.id;
+        const uname = (username ?? "").trim();
+        if (uid && uname) {
+          try {
+            await supabase
+              .from("profiles")
+              .update({ username: uname })
+              .eq("user_id", uid);
+          } catch {
+            // Profile row may not exist yet (trigger creates on confirm); seed from user_metadata in Settings.
+          }
+        }
         // Always require email confirmation: sign out so they cannot enter until they click the email link.
         try {
           await supabase.auth.signOut();

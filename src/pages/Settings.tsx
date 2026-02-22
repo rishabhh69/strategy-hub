@@ -65,45 +65,79 @@ export default function Settings() {
       setUserId(user.id);
       setEmail(user.email ?? "");
 
-      // Step 1: Fetch guaranteed columns (always exist per schema)
-      const { data: coreProfile } = await supabase
-        .from("profiles")
-        .select("username, updated_at")
-        .eq("user_id", user.id)
-        .single();
-
-      const uname = coreProfile?.username?.trim() ?? "";
-      setUsername(uname);
-      setOriginalUsername(uname);
-
-      // Step 2: Try fetching optional columns added by SQL migrations.
-      // These may not exist yet — a missing column must never block the username load.
+      let uname = "";
       let dbChangedAt: string | null = null;
+      let prefsLoaded = false;
+
+      // Prefer backend so cooldown (username_changed_at) is consistent across devices.
       try {
-        const { data: extProfile, error: extErr } = await supabase
+        const res = await fetch(
+          `${API_BASE}/api/user/profile?user_id=${encodeURIComponent(user.id)}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          uname = (data.username ?? "").trim();
+          setStrategyAlerts(data.strategy_alerts ?? true);
+          setMarketUpdates(data.market_updates ?? true);
+          setCommunityMentions(data.community_mentions ?? true);
+          dbChangedAt = data.username_changed_at ?? null;
+          prefsLoaded = true;
+        }
+      } catch {
+        // Backend down — fall back to Supabase
+      }
+
+      if (!prefsLoaded) {
+        // Step 1: Fetch guaranteed columns from Supabase
+        const { data: coreProfile } = await supabase
           .from("profiles")
-          .select("strategy_alerts, market_updates, community_mentions, username_changed_at")
+          .select("username, updated_at")
           .eq("user_id", user.id)
           .single();
 
-        if (!extErr && extProfile) {
-          const ext = extProfile as any;
-          setStrategyAlerts(ext.strategy_alerts    ?? true);
-          setMarketUpdates(ext.market_updates      ?? true);
-          setCommunityMentions(ext.community_mentions ?? true);
-          dbChangedAt = ext.username_changed_at ?? null;
+        uname = coreProfile?.username?.trim() ?? "";
+
+        // Step 2: Optional columns (may not exist yet)
+        try {
+          const { data: extProfile, error: extErr } = await supabase
+            .from("profiles")
+            .select("strategy_alerts, market_updates, community_mentions, username_changed_at")
+            .eq("user_id", user.id)
+            .single();
+
+          if (!extErr && extProfile) {
+            const ext = extProfile as { strategy_alerts?: boolean; market_updates?: boolean; community_mentions?: boolean; username_changed_at?: string | null };
+            setStrategyAlerts(ext.strategy_alerts ?? true);
+            setMarketUpdates(ext.market_updates ?? true);
+            setCommunityMentions(ext.community_mentions ?? true);
+            dbChangedAt = ext.username_changed_at ?? null;
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // Columns not yet added via SQL migration — fall through to localStorage
       }
 
-      // Resolve cooldown: prefer DB value, fall back to localStorage.
-      // localStorage is the reliable source until the SQL migration is run.
+      // Seed username from sign-up metadata if profile never got it (e.g. confirm on another device).
+      if (!uname && (user.user_metadata?.username ?? "").trim()) {
+        const metaUname = (user.user_metadata.username as string).trim();
+        uname = metaUname;
+        try {
+          await supabase
+            .from("profiles")
+            .update({ username: metaUname })
+            .eq("user_id", user.id);
+        } catch {
+          // best-effort
+        }
+      }
+
+      setUsername(uname);
+      setOriginalUsername(uname);
+
       const localChangedAt = lsGetChangedAt(user.id);
       const resolvedChangedAt = dbChangedAt ?? localChangedAt;
       const daysLeft = cooldownRemaining(resolvedChangedAt);
 
-      // Clean up expired localStorage entries
       if (localChangedAt && daysLeft === 0) lsClearChangedAt(user.id);
 
       setUsernameChangedAt(resolvedChangedAt);
