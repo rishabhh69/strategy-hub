@@ -703,23 +703,44 @@ Requirements:
 
         equity      = result_df["equity"].dropna()
         initial     = equity.iloc[0]
-        final       = equity.iloc[-1]
-        days_n      = (result_df["date"].iloc[-1] - result_df["date"].iloc[0]).days
-        years       = days_n / 365.25
-        cagr        = ((final / initial) ** (1 / years) - 1) * 100 if years > 0 else 0
+        final      = equity.iloc[-1]
+        days_n     = (result_df["date"].iloc[-1] - result_df["date"].iloc[0]).days
+        years      = days_n / 365.25
+        cagr       = ((final / initial) ** (1 / years) - 1) * 100 if years > 0 else 0
+        total_ret  = (final / initial - 1) * 100
         running_max = equity.expanding().max()
-        max_dd      = ((equity - running_max) / running_max * 100).min()
-        sharpe      = 0.0
+        max_dd     = ((equity - running_max) / running_max * 100).min()
+        sharpe     = 0.0
+        volatility = 0.0
+        sortino    = 0.0
+        num_trades = 0
         if "strategy_returns" in result_df.columns:
-            ret    = result_df["strategy_returns"].dropna()
-            sharpe = (ret.mean() / ret.std()) * np.sqrt(252) if ret.std() > 0 else 0.0
+            ret = result_df["strategy_returns"].dropna()
+            if len(ret) > 0 and ret.std() > 0:
+                sharpe = (ret.mean() / ret.std()) * np.sqrt(252)
+            volatility = float(ret.std() * np.sqrt(252) * 100) if len(ret) > 0 else 0.0
+            neg = ret[ret < 0]
+            downside_std = neg.std() if len(neg) > 1 else (ret.std() if len(ret) > 0 else 1.0)
+            if downside_std and downside_std > 0:
+                sortino = (ret.mean() / downside_std) * np.sqrt(252)
+        if "position" in result_df.columns:
+            pos = result_df["position"].fillna(0)
+            num_trades = int((pos.diff().fillna(0).abs() > 0).sum())
 
         chart_data = [
             {"time": str(r["date"])[:10], "value": float(r["equity"])}
             for _, r in result_df.iterrows()
         ]
         return BacktestResponse(
-            metrics={"cagr": round(cagr, 2), "drawdown": round(max_dd, 2), "sharpe": round(sharpe, 2)},
+            metrics={
+                "cagr": round(cagr, 2),
+                "drawdown": round(max_dd, 2),
+                "sharpe": round(sharpe, 2),
+                "total_return": round(total_ret, 2),
+                "volatility": round(volatility, 2),
+                "sortino": round(sortino, 2),
+                "num_trades": num_trades,
+            },
             chart_data=chart_data,
             generated_code=code,
         )

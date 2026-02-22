@@ -30,6 +30,10 @@ interface BacktestResult {
     cagr: number;
     drawdown: number;
     sharpe: number;
+    total_return?: number;
+    volatility?: number;
+    sortino?: number;
+    num_trades?: number;
   };
   chart_data: Array<{
     time: string;
@@ -240,7 +244,41 @@ Examples:
                     </div>
                   </div>
                 ) : hasResults && backtestResult ? (
-                  <EquityCurveChart chartData={backtestResult.chart_data} />
+                  <div className="space-y-4">
+                    <div className="rounded-lg bg-muted/50 border border-border p-4 text-sm text-muted-foreground leading-relaxed">
+                      {(() => {
+                        const m = backtestResult.metrics;
+                        const cagr = m.cagr ?? 0;
+                        const dd = m.drawdown ?? 0;
+                        const sharpe = m.sharpe ?? 0;
+                        const totalRet = m.total_return ?? 0;
+                        const vol = m.volatility ?? 0;
+                        const trades = m.num_trades ?? 0;
+                        return (
+                          <p>
+                            Over the backtest period this strategy delivered a total return of{" "}
+                            <span className="text-foreground font-medium">{totalRet.toFixed(2)}%</span>, with a
+                            compound annual growth rate (CAGR) of{" "}
+                            <span className="text-foreground font-medium">{cagr.toFixed(2)}%</span>. Maximum
+                            drawdown was{" "}
+                            <span className="text-foreground font-medium">{dd.toFixed(2)}%</span>, and
+                            risk-adjusted performance produced a Sharpe ratio of{" "}
+                            <span className="text-foreground font-medium">{sharpe.toFixed(2)}</span>
+                            {vol > 0 ? (
+                              <> with annualized volatility of {vol.toFixed(2)}%.</>
+                            ) : (
+                              "."
+                            )}
+                            {trades > 0 ? (
+                              <> The strategy executed{" "}
+                                <span className="text-foreground font-medium">{trades} position change{trades !== 1 ? "s" : ""}</span> over the period.</>
+                            ) : null}
+                          </p>
+                        );
+                      })()}
+                    </div>
+                    <EquityCurveChart chartData={backtestResult.chart_data} />
+                  </div>
                 ) : (
                   <div className="h-full flex items-center justify-center text-muted-foreground">
                     <div className="text-center">

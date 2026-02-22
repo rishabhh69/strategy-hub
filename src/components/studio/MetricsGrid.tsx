@@ -10,58 +10,76 @@ interface Metric {
 
 interface MetricsGridProps {
   metrics?: {
-    cagr: number;
-    drawdown: number;
-    sharpe: number;
+    cagr?: number;
+    drawdown?: number;
+    sharpe?: number;
+    total_return?: number;
+    volatility?: number;
+    sortino?: number;
+    num_trades?: number;
   };
 }
 
 export function MetricsGrid({ metrics: providedMetrics }: MetricsGridProps) {
+  const fmt = (n: number | undefined, pct = false) =>
+    n != null ? (pct ? `${Number(n).toFixed(2)}%` : Number(n).toFixed(2)) : "N/A";
+
   // Use provided metrics or fallback to defaults
   const metrics: Metric[] = providedMetrics
     ? [
         {
           label: "CAGR",
-          value: `${providedMetrics.cagr.toFixed(2)}%`,
+          value: fmt(providedMetrics.cagr, true),
           change: providedMetrics.cagr,
           icon: TrendingUp,
           description: "Compound Annual Growth Rate",
         },
         {
           label: "Max Drawdown",
-          value: `${providedMetrics.drawdown.toFixed(2)}%`,
+          value: fmt(providedMetrics.drawdown, true),
           change: providedMetrics.drawdown,
           icon: TrendingDown,
           description: "Maximum peak-to-trough decline",
         },
         {
           label: "Sharpe Ratio",
-          value: providedMetrics.sharpe.toFixed(2),
+          value: fmt(providedMetrics.sharpe),
           change: providedMetrics.sharpe,
           icon: Activity,
           description: "Risk-adjusted return metric",
         },
         {
-          label: "Win Rate",
-          value: "N/A",
-          change: undefined,
+          label: "Total Return",
+          value: fmt(providedMetrics.total_return, true),
+          change: providedMetrics.total_return,
           icon: Target,
-          description: "Percentage of profitable trades",
+          description: "Cumulative return over backtest period",
         },
         {
           label: "Volatility",
-          value: "N/A",
-          change: undefined,
+          value: fmt(providedMetrics.volatility, true),
+          change: providedMetrics.volatility,
           icon: AlertTriangle,
-          description: "Annualized standard deviation",
+          description: "Annualized standard deviation of returns",
         },
         {
           label: "Sortino Ratio",
-          value: "N/A",
-          change: undefined,
+          value: fmt(providedMetrics.sortino),
+          change: providedMetrics.sortino,
           icon: Percent,
           description: "Downside risk-adjusted return",
         },
+        ...(providedMetrics.num_trades != null
+          ? [
+              {
+                label: "No. of Trades",
+                value: String(providedMetrics.num_trades),
+                change: undefined,
+                icon: Activity,
+                description: "Number of position changes",
+              },
+            ]
+          : []),
       ]
     : [
         {
@@ -110,8 +128,8 @@ export function MetricsGrid({ metrics: providedMetrics }: MetricsGridProps) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
       {metrics.map((metric) => {
-        const isPositive = metric.change && metric.change > 0;
-        const isNeutral = metric.label === "Volatility";
+        const isPositive = metric.change != null && metric.change > 0;
+        const isNeutral = metric.label === "Volatility" || metric.label === "No. of Trades";
         
         return (
           <div 
