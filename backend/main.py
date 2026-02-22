@@ -17,6 +17,7 @@ Security (OWASP alignment):
 
 import asyncio
 import logging
+import math
 import os
 import re
 import random
@@ -640,14 +641,14 @@ async def run_backtest(request: BacktestRequest):
 {request.prompt}
 
 Requirements:
-1. Function named 'strategy' accepting a pandas DataFrame 'data'
-2. Columns: date, open, high, low, close, volume
-3. Add 'signal' column: 1=buy, -1=sell, 0=hold
-4. Add 'position' column: 1=long, -1=short, 0=none
-5. Add 'equity' column: cumulative equity starting from 100000
-6. Use only pandas and numpy
-7. Return modified DataFrame
-8. Output only executable Python code, no markdown
+1. Do NOT use any import statements. You have pre-loaded: pd (pandas), np (numpy), and math. Use only these and standard Python built-ins (e.g. len, range, min, max, sum, enumerate, zip).
+2. Define a single function named 'strategy' that accepts one argument: a pandas DataFrame named 'data'.
+3. DataFrame columns: date, open, high, low, close, volume.
+4. Add 'signal' column: 1=buy, -1=sell, 0=hold.
+5. Add 'position' column: 1=long, -1=short, 0=none.
+6. Add 'equity' column: cumulative equity starting from 100000.
+7. Return the modified DataFrame.
+8. Output only executable Python code, no markdown, no comments that contain code.
 """
     try:
         resp = openai_client.chat.completions.create(
@@ -677,6 +678,7 @@ Requirements:
             "__builtins__": _SAFE_BUILTINS,
             "pd":           pd,
             "np":           np,
+            "math":         math,
         }
         loc: Dict[str, Any] = {}
 
@@ -1783,6 +1785,7 @@ async def bot_worker(
                     "__builtins__": _SAFE_BUILTINS,
                     "pd":           pd,
                     "np":           np,
+                    "math":         math,
                 }
                 loc: Dict[str, Any] = {}
                 try:
