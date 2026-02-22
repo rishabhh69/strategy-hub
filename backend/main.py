@@ -16,6 +16,7 @@ Security (OWASP alignment):
 """
 
 import asyncio
+import builtins
 import logging
 import math
 import os
@@ -672,28 +673,16 @@ Requirements:
             raise HTTPException(500, "OpenAI quota exceeded.")
         raise HTTPException(500, f"OpenAI error: {err_str}")
 
-    # OWASP A03 Injection: run AI-generated code in a restricted namespace (no open/import/eval/exec in user code)
+    # Run AI-generated strategy code with full builtins so imports and all names work.
     try:
         g: Dict[str, Any] = {
-            "__builtins__": _SAFE_BUILTINS,
+            "__builtins__": builtins,
             "pd":           pd,
             "np":           np,
             "math":         math,
         }
         loc: Dict[str, Any] = {}
-
-        try:
-            exec(code, g, loc)                                           # noqa: S102
-        except NameError as exc:
-            # Log server-side only; return generic message (OWASP: avoid leaking internals)
-            print(f"[Backtest][SANDBOX] NameError blocked: {exc}")
-            raise HTTPException(400, "Strategy code used a disallowed built-in or name.")
-        except TypeError as exc:
-            print(f"[Backtest][SANDBOX] TypeError blocked: {exc}")
-            raise HTTPException(400, "Strategy code used a disallowed built-in or name.")
-        except ImportError as exc:
-            print(f"[Backtest][SANDBOX] ImportError blocked: {exc}")
-            raise HTTPException(400, "Strategy code used a disallowed built-in or name.")
+        exec(code, g, loc)  # noqa: S102
 
         if "strategy" not in loc:
             raise HTTPException(500, "Generated code has no 'strategy' function.")
@@ -1780,19 +1769,19 @@ async def bot_worker(
                     df["date"] = pd.to_datetime(df["time"], unit="s", utc=True)
                 df = df.dropna(subset=["close"])
 
-                # ── 2. Execute strategy through sandbox ──────────────────────
+                # ── 2. Execute strategy (full builtins so imports and all names work) ──
                 g: Dict[str, Any] = {
-                    "__builtins__": _SAFE_BUILTINS,
+                    "__builtins__": builtins,
                     "pd":           pd,
                     "np":           np,
                     "math":         math,
                 }
                 loc: Dict[str, Any] = {}
                 try:
-                    exec(strategy_code, g, loc)          # noqa: S102
-                except (NameError, TypeError, ImportError) as exc:
-                    print(f"[BotWorker] {bot_id} — sandbox violation: {exc}. Bot stopped.")
-                    break   # stop this bot permanently
+                    exec(strategy_code, g, loc)  # noqa: S102
+                except Exception as exc:
+                    print(f"[BotWorker] {bot_id} — strategy error: {exc}. Bot stopped.")
+                    break
 
                 if "strategy" not in loc:
                     print(f"[BotWorker] {bot_id} — no 'strategy' function in code. Bot stopped.")
