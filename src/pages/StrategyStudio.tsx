@@ -244,14 +244,21 @@ Examples:
                     </div>
                   </div>
                 ) : hasResults && backtestResult ? (
-                  <div className="space-y-4">
-                    <div className="rounded-lg bg-muted/50 border border-border p-4 text-sm text-muted-foreground leading-relaxed">
+                  <div className="space-y-4 min-h-0 flex flex-col">
+                    <div className="rounded-lg bg-muted/50 border border-border p-4 text-sm text-muted-foreground leading-relaxed shrink-0">
                       {(() => {
                         const m = backtestResult.metrics;
+                        const chart = backtestResult.chart_data ?? [];
+                        const firstVal = chart.length > 0 ? chart[0]?.value : null;
+                        const lastVal = chart.length > 0 ? chart[chart.length - 1]?.value : null;
+                        const derivedTotalReturn =
+                          firstVal != null && lastVal != null && firstVal !== 0
+                            ? ((lastVal / firstVal) - 1) * 100
+                            : undefined;
                         const cagr = m.cagr ?? 0;
                         const dd = m.drawdown ?? 0;
                         const sharpe = m.sharpe ?? 0;
-                        const totalRet = m.total_return ?? 0;
+                        const totalRet = m.total_return ?? derivedTotalReturn ?? 0;
                         const vol = m.volatility ?? 0;
                         const trades = m.num_trades ?? 0;
                         return (
@@ -277,7 +284,9 @@ Examples:
                         );
                       })()}
                     </div>
-                    <EquityCurveChart chartData={backtestResult.chart_data} />
+                    <div className="min-h-[320px] flex-1">
+                      <EquityCurveChart chartData={backtestResult.chart_data} />
+                    </div>
                   </div>
                 ) : (
                   <div className="h-full flex items-center justify-center text-muted-foreground">
@@ -305,7 +314,22 @@ Examples:
                     </div>
                   </div>
                 ) : hasResults && backtestResult ? (
-                  <MetricsGrid metrics={backtestResult.metrics} />
+                  <MetricsGrid
+                    metrics={(() => {
+                      const m = backtestResult.metrics;
+                      const chart = backtestResult.chart_data ?? [];
+                      const firstVal = chart.length > 0 ? chart[0]?.value : null;
+                      const lastVal = chart.length > 0 ? chart[chart.length - 1]?.value : null;
+                      const derivedTotalReturn =
+                        firstVal != null && lastVal != null && firstVal !== 0
+                          ? ((lastVal / firstVal) - 1) * 100
+                          : undefined;
+                      return {
+                        ...m,
+                        total_return: m.total_return ?? derivedTotalReturn,
+                      };
+                    })()}
+                  />
                 ) : (
                   <div className="h-full flex items-center justify-center text-muted-foreground">
                     <div className="text-center">
