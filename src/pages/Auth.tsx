@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Mail, Lock, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +18,10 @@ export default function Auth() {
   const [signInUnconfirmed, setSignInUnconfirmed] = useState(false);
   const navigate = useNavigate();
 
-  const callbackUrl = `${window.location.origin}/auth/callback`;
+  // Use VITE_APP_URL in production so the confirmation email link points to your app (set in Vercel env).
+  // Add this exact URL to Supabase Dashboard → Authentication → URL Configuration → Redirect URLs.
+  const appOrigin = import.meta.env.VITE_APP_URL || window.location.origin;
+  const callbackUrl = `${appOrigin}/auth/callback`;
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,7 +38,8 @@ export default function Auth() {
 
         if (error) throw error;
         const user = data.user;
-        if (user && !user.email_confirmed_at) {
+        const confirmed = user && !!(user.email_confirmed_at ?? (user as { confirmed_at?: string }).confirmed_at);
+        if (user && !confirmed) {
           await supabase.auth.signOut();
           setSignInUnconfirmed(true);
           setLoading(false);
@@ -54,17 +58,15 @@ export default function Auth() {
         });
 
         if (error) throw error;
-        const user = data.user;
-        const session = data.session;
-        const needsConfirmation = user && !user.email_confirmed_at;
-        if (needsConfirmation || !session) {
+        // Always require email confirmation: sign out so they cannot enter until they click the email link.
+        try {
           await supabase.auth.signOut();
-          setSignUpSuccess(true);
-          setLoading(false);
-          return;
+        } catch {
+          // Ignore signOut errors; still show "Check your email".
         }
-        toast.success("Account created! Welcome to Tradeky.");
-        navigate("/strategy-studio");
+        setSignUpSuccess(true);
+        setLoading(false);
+        return;
       }
     } catch (error: any) {
       toast.error(error.message);
@@ -158,6 +160,11 @@ export default function Auth() {
                   ? "You can close this page. After confirming, open Tradeky again and sign in."
                   : "After confirming, come back here and sign in."}
               </p>
+              {signUpSuccess && (
+                <p className="text-[10px] text-muted-foreground/80 text-center max-w-sm mx-auto">
+                  If the confirmation link sends you to the wrong site, in Supabase Dashboard go to Authentication → URL Configuration: set <strong>Site URL</strong> to your app (e.g. your Vercel URL) and add <strong>{callbackUrl}</strong> to Redirect URLs.
+                </p>
+              )}
               <Button
                 type="button"
                 variant="outline"

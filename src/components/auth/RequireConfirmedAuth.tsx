@@ -25,7 +25,9 @@ export function RequireConfirmedAuth() {
         setState("guest");
         return;
       }
-      if (!user.email_confirmed_at) {
+      // Treat as unconfirmed if email_confirmed_at or confirmed_at is missing (Supabase may use either).
+      const confirmed = !!(user.email_confirmed_at ?? (user as { confirmed_at?: string }).confirmed_at);
+      if (!confirmed) {
         setEmail(user.email ?? "");
         setState("unconfirmed");
         return;
