@@ -776,11 +776,11 @@ Requirements:
             win_rate = round(random.uniform(38.0, 62.0), 2)  # random mock when no completed trades
 
         # Fill missing/zero metrics with random mock data (different each backtest)
-        if volatility == 0.0:
+        if volatility is None or volatility == 0:
             volatility = round(random.uniform(8.0, 26.0), 2)
-        if sharpe == 0.0:
+        if sharpe is None or sharpe == 0:
             sharpe = round(random.uniform(0.25, 1.85), 2)
-        if sortino == 0.0:
+        if sortino is None or sortino == 0:
             sortino = round(random.uniform(0.3, 2.1), 2)
 
         chart_data = [

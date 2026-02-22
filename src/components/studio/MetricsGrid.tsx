@@ -59,14 +59,14 @@ export function MetricsGrid({ metrics: providedMetrics }: MetricsGridProps) {
         {
           label: "Volatility",
           value: fmt(providedMetrics.volatility, true),
-          change: providedMetrics.volatility,
+          change: providedMetrics.volatility ?? 0,
           icon: AlertTriangle,
           description: "Annualized standard deviation of returns",
         },
         {
           label: "Sortino Ratio",
           value: fmt(providedMetrics.sortino),
-          change: providedMetrics.sortino,
+          change: providedMetrics.sortino ?? 0,
           icon: Percent,
           description: "Downside risk-adjusted return",
         },
