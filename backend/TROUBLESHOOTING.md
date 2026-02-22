@@ -49,10 +49,12 @@ If you can't resolve the OpenAI quota issue, you could:
 
 ## Other Common Errors
 
-### "Invalid API Key"
-- Check that your API key is correct (starts with `sk-`)
-- Make sure there are no extra spaces or quotes
-- Verify the environment variable is set: `echo $env:OPENAI_API_KEY`
+### "Incorrect API key provided" / "Invalid API Key"
+- **Get a fresh key:** Go to https://platform.openai.com/api-keys → Create new secret key. Old keys can be revoked.
+- **No spaces or quotes:** In `backend\.env` use exactly: `OPENAI_API_KEY=sk-proj-xxxx...` with no quotes and no space before/after `=`.
+- **Full key:** Keys usually start with `sk-proj-` or `sk-` and are long; copy the whole key from OpenAI.
+- **Restart the server** after changing `.env`.
+- The backend trims leading/trailing whitespace from the key automatically.
 
 ### "No data found for ticker"
 - The ticker symbol might be incorrect

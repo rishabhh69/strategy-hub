@@ -9,7 +9,7 @@ Data fetching strategy (most reliable → least):
 Security (OWASP alignment):
   - Rate limiting (A04 Insecure Design): throttle by IP to reduce abuse/DoS.
   - Input validation (A03 Injection): strict schemas, length limits, no extra fields.
-  - Sandboxed code execution (A03): backtest/bot strategy code runs with restricted builtins.
+  - Backtest/bot strategy code runs with full builtins (no sandbox) so AI-generated code can use pd, np, math, imports.
   - CORS (A05 Misconfiguration): restrict allow_origins in production to your frontend.
   - Paper trading uses client-supplied user_id (A01 Access Control): acceptable for demo;
     for real money, enforce server-side authentication and authorization.
@@ -20,6 +20,13 @@ import builtins
 import logging
 import math
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from the backend directory (where main.py lives)
+_load_env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(_load_env_path)
 import re
 import random
 import signal
@@ -130,7 +137,7 @@ app.middleware("http")(_rate_limit_middleware)
 # ---------------------------------------------------------------------------
 # OpenAI
 # ---------------------------------------------------------------------------
-openai_api_key = os.getenv("OPENAI_API_KEY")
+openai_api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
 if not openai_api_key:
     print("WARNING: OPENAI_API_KEY not set — /backtest will not work.")
 openai_client = OpenAI(api_key=openai_api_key) if openai_api_key else None

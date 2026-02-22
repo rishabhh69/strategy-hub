@@ -115,7 +115,13 @@ export default function StrategyStudio() {
           .eq("id", sentimentLogId);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to run backtest");
+      const raw = err instanceof Error ? err.message : "Failed to run backtest";
+      // If backend still returns the old sandbox error, show actionable message
+      const msg =
+        typeof raw === "string" && raw.toLowerCase().includes("disallowed built-in")
+          ? "Strategy could not run. Restart your backend server (or redeploy) to apply the latest fix, then try again."
+          : raw;
+      setError(msg);
       setHasResults(false);
     } finally {
       setIsRunning(false);

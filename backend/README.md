@@ -9,24 +9,25 @@ Python FastAPI backend for the Strategy Hub trading application.
    pip install -r requirements.txt
    ```
 
-2. **Set OpenAI API Key (required for backtest endpoint):**
+2. **Set OpenAI API Key (required for backtest / Strategy Studio):**
    
-   **Option A: Use the startup script (Easiest - includes your API key):**
+   **Option A – .env file (recommended):**
    ```powershell
-   .\start_server.ps1
+   cd backend
+   copy .env.example .env
+   # Edit .env and set: OPENAI_API_KEY=sk-your-key-here
    ```
-   Or double-click `start_server.bat` in Windows Explorer
+   Then run `start_server.bat` or `python main.py`. The server loads `OPENAI_API_KEY` from `backend\.env`.
    
-   **Option B: Set manually in PowerShell:**
+   **Option B – This terminal only:**
    ```powershell
-   $env:OPENAI_API_KEY="tradeky_api_2510"
+   set OPENAI_API_KEY=sk-your-key-here
    python main.py
    ```
    
-   **Option C: Set permanently in Windows:**
-   - Open System Properties → Environment Variables
-   - Add `OPENAI_API_KEY` with your API key value
-   - Restart your terminal/IDE
+   **Option C – System environment variable:**
+   - Windows: System Properties → Environment Variables → add `OPENAI_API_KEY`
+   - Restart terminal/IDE after changing
 
 3. **Run the server:**
    ```powershell
