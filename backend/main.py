@@ -701,6 +701,13 @@ Requirements:
             result_df["strategy_returns"] = pos_col.shift(1) * result_df["returns"]
             result_df["equity"]           = 100_000 * (1 + result_df["strategy_returns"]).cumprod()
 
+        # Ensure strategy_returns exist so we can compute sharpe, volatility, sortino
+        # (many AI strategies only add equity/signal/position, not strategy_returns)
+        if "strategy_returns" not in result_df.columns:
+            result_df["returns"]          = result_df["close"].pct_change()
+            pos_col                       = result_df.get("position", pd.Series(0, index=result_df.index))
+            result_df["strategy_returns"] = pos_col.shift(1) * result_df["returns"]
+
         equity      = result_df["equity"].dropna()
         initial     = equity.iloc[0]
         final      = equity.iloc[-1]
@@ -714,15 +721,20 @@ Requirements:
         volatility = 0.0
         sortino    = 0.0
         num_trades = 0
-        if "strategy_returns" in result_df.columns:
-            ret = result_df["strategy_returns"].dropna()
-            if len(ret) > 0 and ret.std() > 0:
-                sharpe = (ret.mean() / ret.std()) * np.sqrt(252)
-            volatility = float(ret.std() * np.sqrt(252) * 100) if len(ret) > 0 else 0.0
+
+        ret = result_df["strategy_returns"].dropna()
+        if len(ret) > 0:
+            vol_std = ret.std()
+            volatility = float(vol_std * np.sqrt(252) * 100) if pd.notna(vol_std) else 0.0
+            if vol_std and vol_std > 0:
+                sharpe = (ret.mean() / vol_std) * np.sqrt(252)
             neg = ret[ret < 0]
-            downside_std = neg.std() if len(neg) > 1 else (ret.std() if len(ret) > 0 else 1.0)
+            downside_std = neg.std() if len(neg) > 1 and neg.std() and neg.std() > 0 else None
             if downside_std and downside_std > 0:
                 sortino = (ret.mean() / downside_std) * np.sqrt(252)
+            elif vol_std and vol_std > 0:
+                sortino = (ret.mean() / vol_std) * np.sqrt(252)
+
         if "position" in result_df.columns:
             pos = result_df["position"].fillna(0)
             num_trades = int((pos.diff().fillna(0).abs() > 0).sum())
