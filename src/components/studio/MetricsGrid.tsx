@@ -17,6 +17,7 @@ interface MetricsGridProps {
     volatility?: number;
     sortino?: number;
     num_trades?: number;
+    win_rate?: number;
   };
 }
 
@@ -68,6 +69,13 @@ export function MetricsGrid({ metrics: providedMetrics }: MetricsGridProps) {
           change: providedMetrics.sortino,
           icon: Percent,
           description: "Downside risk-adjusted return",
+        },
+        {
+          label: "Win Rate",
+          value: providedMetrics.win_rate != null ? `${Number(providedMetrics.win_rate).toFixed(1)}%` : "N/A",
+          change: providedMetrics.win_rate,
+          icon: Target,
+          description: "Percentage of profitable round-trip trades",
         },
         ...(providedMetrics.num_trades != null
           ? [
@@ -123,6 +131,13 @@ export function MetricsGrid({ metrics: providedMetrics }: MetricsGridProps) {
           change: 2.14,
           icon: Percent,
           description: "Downside risk-adjusted return",
+        },
+        {
+          label: "Win Rate",
+          value: "50.0%",
+          change: 50,
+          icon: Target,
+          description: "Percentage of profitable round-trip trades",
         },
       ];
   return (

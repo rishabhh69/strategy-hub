@@ -34,6 +34,7 @@ interface BacktestResult {
     volatility?: number;
     sortino?: number;
     num_trades?: number;
+    win_rate?: number;
   };
   chart_data: Array<{
     time: string;

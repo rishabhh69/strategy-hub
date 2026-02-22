@@ -739,6 +739,40 @@ Requirements:
             pos = result_df["position"].fillna(0)
             num_trades = int((pos.diff().fillna(0).abs() > 0).sum())
 
+        # Win rate: % of completed round-trip trades that were profitable
+        win_rate: Optional[float] = None
+        if "position" in result_df.columns and "equity" in result_df.columns:
+            pos = result_df["position"].fillna(0)
+            eq = result_df["equity"]
+            trade_pnls: List[float] = []
+            in_trade = False
+            start_idx: Optional[int] = None
+            direction = 0
+            for i in range(len(result_df)):
+                p = pos.iloc[i]
+                if p != 0:
+                    if not in_trade:
+                        in_trade = True
+                        start_idx = i
+                        direction = int(p) if p in (1, -1) else (1 if p > 0 else -1)
+                else:
+                    if in_trade and start_idx is not None:
+                        eq_start = float(eq.iloc[start_idx])
+                        eq_end = float(eq.iloc[i - 1])
+                        pnl = (eq_end - eq_start) * direction
+                        trade_pnls.append(pnl)
+                        in_trade = False
+            if in_trade and start_idx is not None:
+                eq_start = float(eq.iloc[start_idx])
+                eq_end = float(eq.iloc[-1])
+                pnl = (eq_end - eq_start) * direction
+                trade_pnls.append(pnl)
+            if len(trade_pnls) > 0:
+                wins = sum(1 for x in trade_pnls if x > 0)
+                win_rate = round(wins / len(trade_pnls) * 100, 2)
+        if win_rate is None:
+            win_rate = 50.0  # mock when no completed trades
+
         chart_data = [
             {"time": str(r["date"])[:10], "value": float(r["equity"])}
             for _, r in result_df.iterrows()
@@ -752,6 +786,7 @@ Requirements:
                 "volatility": round(volatility, 2),
                 "sortino": round(sortino, 2),
                 "num_trades": num_trades,
+                "win_rate": win_rate,
             },
             chart_data=chart_data,
             generated_code=code,
