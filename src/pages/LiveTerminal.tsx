@@ -285,8 +285,10 @@ export default function LiveTerminal() {
 
   // ── 4. Fetch account + logs ───────────────────────────────────────────────────
   const fetchAccount = useCallback(async (uid: string) => {
+    const u = (uid ?? "").trim();
+    if (!u) return;
     try {
-      const res = await fetch(`${API_BASE}/api/paper-trading/account?user_id=${uid}`);
+      const res = await fetch(`${API_BASE}/api/paper-trading/account?user_id=${encodeURIComponent(u)}`);
       if (res.ok) {
         const d = await res.json();
         // Only update balance/positions if backend has meaningful data.
@@ -310,15 +312,19 @@ export default function LiveTerminal() {
   }, []);
 
   const fetchPendingOrders = useCallback(async (uid: string) => {
+    const u = (uid ?? "").trim();
+    if (!u) return;
     try {
-      const res = await fetch(`${API_BASE}/api/paper-trading/pending-orders?user_id=${uid}`);
+      const res = await fetch(`${API_BASE}/api/paper-trading/pending-orders?user_id=${encodeURIComponent(u)}`);
       if (res.ok) setPendingOrders(await res.json());
     } catch {}
   }, []);
 
   const fetchLogs = useCallback(async (uid: string) => {
+    const u = (uid ?? "").trim();
+    if (!u) return;
     try {
-      const res = await fetch(`${API_BASE}/api/paper-trading/logs?user_id=${uid}&limit=500`);
+      const res = await fetch(`${API_BASE}/api/paper-trading/logs?user_id=${encodeURIComponent(u)}&limit=500`);
       if (!res.ok) return;
       const rows: any[] = await res.json();
       const incoming: OrderLogEntry[] = rows.map(lg => ({
@@ -341,12 +347,13 @@ export default function LiveTerminal() {
 
   // ── 5. Init: load localStorage → await restore → fetch backend (sequential) ──
   useEffect(() => {
-    if (!userId) return;
+    const uid = (userId ?? "").trim();
+    if (!uid) return;
     let cancelled = false;
 
     async function init() {
       // Step A — show localStorage data immediately so UI is never blank
-      const saved = loadPaperState(userId);
+      const saved = loadPaperState(uid);
       if (saved) {
         setPaperBalance(saved.balance);
         setDayPnl(saved.dayPnl ?? 0);
@@ -359,7 +366,7 @@ export default function LiveTerminal() {
           await fetch(`${API_BASE}/api/paper-trading/restore`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              user_id:   userId,
+              user_id:   uid,
               balance:   saved.balance,
               positions: saved.positions ?? [],
               day_pnl:   saved.dayPnl ?? 0,
@@ -371,9 +378,9 @@ export default function LiveTerminal() {
       if (cancelled) return;
 
       // Step C — now fetch fresh data (backend is properly seeded)
-      await fetchAccount(userId);
-      await fetchLogs(userId);
-      await fetchPendingOrders(userId);
+      await fetchAccount(uid);
+      await fetchLogs(uid);
+      await fetchPendingOrders(uid);
     }
 
     init();
@@ -381,9 +388,9 @@ export default function LiveTerminal() {
     // ── 7. Polling every 15 s (starts after init) ──
     const id = setInterval(() => {
       if (!cancelled) {
-        fetchAccount(userId);
-        fetchLogs(userId);
-        fetchPendingOrders(userId);
+        fetchAccount(uid);
+        fetchLogs(uid);
+        fetchPendingOrders(uid);
       }
     }, 15_000);
 
@@ -607,7 +614,8 @@ export default function LiveTerminal() {
 
   // ── Execute Trade ─────────────────────────────────────────────────────────────
   const executeTrade = async (side: "buy" | "sell") => {
-    if (!userId) return;
+    const uid = (userId ?? "").trim();
+    if (!uid) return;
     if (backendOnline === false) {
       toast.error("Backend offline. Start: cd backend && .\\start_server.bat");
       return;
@@ -619,8 +627,8 @@ export default function LiveTerminal() {
     setTradeLoading(side);
     try {
       const payload: Record<string, unknown> = {
-        user_id:     userId,
-        symbol:      tradeTicker,
+        user_id:     uid,
+        symbol:      (tradeTicker || "").trim() || "NIFTY",
         quantity:    tradeQty,
         side,
         order_type:  orderType,
@@ -643,7 +651,7 @@ export default function LiveTerminal() {
         // Limit order queued
         const msg = data.message ?? `Limit order queued: ${side.toUpperCase()} ${tradeQty} ${tradeTicker} @ ₹${fmt(Number(limitPrice))}`;
         setOrderLog(prev => [{ time: now, type: "info", message: msg }, ...prev]);
-        fetchPendingOrders(userId);
+        fetchPendingOrders(uid);
         setCentreTab("pending");
         toast.info(msg);
       } else {
@@ -652,8 +660,8 @@ export default function LiveTerminal() {
         setOrderLog(prev => [{ time: now, type: "trade", action: side, message: msg, pnl: data.realized_pnl }, ...prev]);
         if (data.new_balance !== undefined) setPaperBalance(data.new_balance);
         if (data.new_day_pnl !== undefined) setDayPnl(data.new_day_pnl);
-        fetchLogs(userId);
-        fetchAccount(userId);
+        fetchLogs(uid);
+        fetchAccount(uid);
         const pnlNote = side === "sell" && data.realized_pnl !== undefined
           ? `  |  P&L ${data.realized_pnl >= 0 ? "+" : ""}₹${fmt(data.realized_pnl)}`
           : "";
@@ -676,13 +684,13 @@ export default function LiveTerminal() {
       setTradeTicker(pos.symbol);
       setTradeQty(pos.quantity);
     }, 0);
-    // Execute sell immediately
-    if (!userId || backendOnline === false) return;
+    const uid = (userId ?? "").trim();
+    if (!uid || backendOnline === false) return;
     setTradeLoading("sell");
     try {
       const res = await fetch(`${API_BASE}/api/paper-trading/execute`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId, symbol: pos.symbol, quantity: pos.quantity, side: "sell" }),
+        body: JSON.stringify({ user_id: uid, symbol: (pos.symbol || "").trim(), quantity: pos.quantity, side: "sell" }),
       });
       if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(apiErrorMsg(e.detail, "Close failed")); }
       const data = await res.json();
@@ -690,7 +698,7 @@ export default function LiveTerminal() {
       setOrderLog(prev => [{ time: now, type: "trade", action: "sell", message: data.message, pnl: data.realized_pnl }, ...prev]);
       if (data.new_balance !== undefined) setPaperBalance(data.new_balance);
       if (data.new_day_pnl !== undefined) setDayPnl(data.new_day_pnl);
-      fetchAccount(userId);
+      fetchAccount(uid);
       toast.success(`Position closed — ${pos.symbol}  P&L ${data.realized_pnl >= 0 ? "+" : ""}₹${fmt(data.realized_pnl)}`);
     } catch (err: any) { toast.error(err.message ?? "Close failed"); }
     finally { setTradeLoading(null); }
@@ -698,12 +706,13 @@ export default function LiveTerminal() {
 
   // ── Cancel pending limit order ────────────────────────────────────────────────
   const cancelOrder = async (orderId: string) => {
-    if (!userId) return;
+    const uid = (userId ?? "").trim();
+    if (!uid) return;
     setCancellingId(orderId);
     try {
       const res = await fetch(`${API_BASE}/api/paper-trading/cancel-order`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId, order_id: orderId }),
+        body: JSON.stringify({ user_id: uid, order_id: orderId }),
       });
       if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(apiErrorMsg(e.detail, "Cancel failed")); }
       setPendingOrders(prev => prev.filter(o => o.id !== orderId));
@@ -716,20 +725,21 @@ export default function LiveTerminal() {
 
   // ── Square off all positions ──────────────────────────────────────────────────
   const squareOffAll = async () => {
-    if (!userId || positions.length === 0) return;
+    const uid = (userId ?? "").trim();
+    if (!uid || positions.length === 0) return;
     if (!confirm(`Square off all ${positions.length} open position(s)? This cannot be undone.`)) return;
     setSquaringOff(true);
     try {
       const res = await fetch(`${API_BASE}/api/paper-trading/square-off-all`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId }),
+        body: JSON.stringify({ user_id: uid }),
       });
       if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(apiErrorMsg(e.detail, "Square off failed")); }
       const data = await res.json();
       if (data.new_balance !== undefined) setPaperBalance(data.new_balance);
       if (data.new_day_pnl !== undefined) setDayPnl(data.new_day_pnl);
-      fetchAccount(userId);
-      fetchLogs(userId);
+      fetchAccount(uid);
+      fetchLogs(uid);
       const sign = (data.total_pnl ?? 0) >= 0 ? "+" : "";
       toast.success(`Square-off complete. Total P&L: ${sign}₹${fmt(data.total_pnl ?? 0)}`);
     } catch (err: any) { toast.error(err.message ?? "Square-off failed"); }
@@ -754,7 +764,7 @@ export default function LiveTerminal() {
     if (backendOnline === false) { toast.error("Backend offline."); return; }
     setDeploying(true);
     try {
-      const title = useInline ? inlineStrategy!.title : strat!.title;
+      const title = (useInline ? inlineStrategy!.title : strat!.title)?.trim() || "Strategy";
       const body = useInline
         ? {
             user_id:            uid,
@@ -762,14 +772,14 @@ export default function LiveTerminal() {
             symbol:             symbol,
             quantity:           deployQty,
             title,
-            inline_logic_text:  inlineStrategy!.logicText,
+            inline_logic_text:  (inlineStrategy!.logicText || "").trim(),
           }
         : {
             user_id:     uid,
             strategy_id: strat!.id,
             symbol:      symbol,
             quantity:    deployQty,
-            title:       strat!.title,
+            title:       (strat!.title || "").trim() || "Strategy",
           };
 
       const res = await fetch(`${API_BASE}/api/paper-trading/deploy-bot`, {
@@ -817,14 +827,15 @@ export default function LiveTerminal() {
 
   // ── Reset Account ─────────────────────────────────────────────────────────────
   const resetAccount = () => {
-    if (!userId) return;
+    const uid = (userId ?? "").trim();
+    if (!uid) return;
     if (!confirm("Reset paper account to ₹1,00,000? All positions and history will be cleared.")) return;
-    clearPaperState(userId);
+    clearPaperState(uid);
     setPaperBalance(STARTING_CAPITAL);
     setDayPnl(0); setPositions([]); setUnrealizedPnl(0); setPositionPrices({}); setOrderLog([]); setOpenPositionsCount(0);
     fetch(`${API_BASE}/api/paper-trading/restore`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, balance: STARTING_CAPITAL, positions: [], day_pnl: 0 }),
+      body: JSON.stringify({ user_id: uid, balance: STARTING_CAPITAL, positions: [], day_pnl: 0 }),
     }).catch(() => {});
     toast.success("Account reset to ₹1,00,000");
   };
