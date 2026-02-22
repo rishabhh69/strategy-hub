@@ -40,6 +40,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 from fastapi import FastAPI, HTTPException, Path, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from openai import OpenAI
@@ -124,6 +125,26 @@ async def _rate_limit_middleware(request: Request, call_next):
 # Production: set allow_origins to your frontend only (e.g. ["https://tradeky.in"]).
 # ---------------------------------------------------------------------------
 app = FastAPI(title="Tradeky Backend")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_request: Request, exc: RequestValidationError):
+    """Return a friendly message instead of Pydantic's 'string should have at least 1 character'."""
+    detail = "Please refresh the page and try again. If you just opened Live Terminal, wait a moment for your session to load."
+    try:
+        for e in exc.errors():
+            loc = e.get("loc") or []
+            loc_str = str(loc)
+            if "user_id" in loc_str:
+                detail = "Session not ready. Please refresh the page or sign in and try again."
+                break
+            if "symbol" in loc_str:
+                detail = "Please select a symbol (e.g. Nifty 50) before deploying or trading."
+                break
+    except Exception:
+        pass
+    return JSONResponse(status_code=422, content={"detail": detail})
+
 
 app.add_middleware(
     CORSMiddleware,
