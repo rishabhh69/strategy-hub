@@ -169,25 +169,34 @@ export default function StrategyStudio() {
       return;
     }
     setDeploying(true);
+    const title = strategyInput.trim().slice(0, 80) || "Backtest strategy";
+    const logicText = backtestResult.generated_code.trim();
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const title = strategyInput.trim().slice(0, 80) || "Backtest strategy";
-      const payload: Record<string, unknown> = {
-        title,
-        logic_text: backtestResult.generated_code.trim(),
-      };
+
+      // Try with user_id first (if logged in), then without (in case table has no user_id or RLS blocks it)
+      let payload: Record<string, unknown> = { title, logic_text: logicText };
       if (user?.id) payload.user_id = user.id;
-      const { data: strategy, error: insertError } = await supabase
-        .from("strategies")
-        .insert(payload)
-        .select("id, title")
-        .single();
-      if (insertError) throw insertError;
-      const name = (strategy as { title?: string } | null)?.title ?? title;
+
+      let result = await supabase.from("strategies").insert(payload).select("id, title").single();
+
+      if (result.error && (user?.id && (result.error.message?.includes("user_id") || result.error.message?.includes("policy") || result.error.message?.includes("row-level")))) {
+        payload = { title, logic_text: logicText };
+        result = await supabase.from("strategies").insert(payload).select("id, title").single();
+      }
+
+      if (result.error) {
+        const msg = result.error.message || result.error.details || "Failed to save strategy";
+        toast.error(msg);
+        return;
+      }
+
+      const name = (result.data as { title?: string } | null)?.title ?? title;
       toast.success(`Strategy "${name}" saved. Opening Live Terminal.`);
       navigate("/terminal");
     } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : "Failed to save strategy");
+      const msg = e instanceof Error ? e.message : "Failed to save strategy";
+      toast.error(msg);
     } finally {
       setDeploying(false);
     }
