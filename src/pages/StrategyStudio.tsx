@@ -91,7 +91,10 @@ export default function StrategyStudio() {
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: "Unknown error" }));
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        const msg = Array.isArray(errorData.detail)
+          ? errorData.detail.map((e: { msg?: string }) => e.msg).filter(Boolean)[0] || "Validation failed"
+          : errorData.detail || `HTTP error! status: ${response.status}`;
+        throw new Error(msg);
       }
       
       const data: BacktestResult = await response.json();

@@ -5,11 +5,20 @@ Data fetching strategy (most reliable → least):
   1. Yahoo Finance v8 chart API (direct HTTP, no auth needed, fast)
   2. yf.Ticker.history()  as fallback
   3. Return empty / zeros — never synthetic mock data for quotes/candles
+
+Security (OWASP alignment):
+  - Rate limiting (A04 Insecure Design): throttle by IP to reduce abuse/DoS.
+  - Input validation (A03 Injection): strict schemas, length limits, no extra fields.
+  - Sandboxed code execution (A03): backtest/bot strategy code runs with restricted builtins.
+  - CORS (A05 Misconfiguration): restrict allow_origins in production to your frontend.
+  - Paper trading uses client-supplied user_id (A01 Access Control): acceptable for demo;
+    for real money, enforce server-side authentication and authorization.
 """
 
 import asyncio
 import logging
 import os
+import re
 import random
 import signal
 import sys
@@ -21,26 +30,100 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Path, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logging.getLogger("yfinance").setLevel(logging.WARNING)
 logging.getLogger("peewee").setLevel(logging.CRITICAL)
 
 # ---------------------------------------------------------------------------
-# App + CORS  (allow all origins in dev)
+# Rate limiting (OWASP A04 – Insecure Design: anti-abuse / DoS mitigation)
+# In-memory, IP-based; graceful 429 with Retry-After so clients can back off.
+# WebSockets are excluded. For multi-instance deploy, consider Redis-backed limiter.
+# ---------------------------------------------------------------------------
+_RATE_WINDOW_SEC = 60
+_RATE_STORE: Dict[str, Tuple[int, float]] = {}
+_RATE_LOCK = asyncio.Lock()
+
+# (path_prefix, method) -> max requests per IP per window. First match wins.
+_RATE_RULES: List[Tuple[str, str, int]] = [
+    ("/backtest", "POST", 15),
+    ("/api/paper-trading/deploy-bot", "POST", 15),
+    ("/api/paper-trading/execute", "POST", 30),
+    ("/api/paper-trading/restore", "POST", 30),
+    ("/api/paper-trading/square-off-all", "POST", 10),
+    ("/api/greed-ai/analyze", "POST", 40),
+]
+
+
+def _client_ip(scope: Dict) -> str:
+    """Resolve client IP for rate limiting. Prefer X-Forwarded-For / X-Real-IP when behind a proxy (OWASP: trust only if proxy is trusted)."""
+    headers = dict((k.decode().lower(), v.decode()) for k, v in scope.get("headers", []))
+    forwarded = headers.get("x-forwarded-for") or headers.get("x-real-ip")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    client = scope.get("client")
+    if client:
+        return client[0]
+    return "0.0.0.0"
+
+
+def _rate_limit_for_path(path: str, method: str) -> int:
+    path_only = path.split("?")[0].rstrip("/") or "/"
+    for prefix, m, limit in _RATE_RULES:
+        if method.upper() == m and path_only.startswith(prefix.rstrip("/") or "/"):
+            return limit
+    return 60 if method.upper() == "POST" else 120
+
+
+async def _rate_limit_middleware(request: Request, call_next):
+    if request.scope.get("type") == "websocket":
+        return await call_next(request)
+    path = request.scope.get("path", "")
+    method = request.scope.get("method", "GET")
+    ip = _client_ip(request.scope)
+    key = f"{ip}:{method}:{path.split('?')[0]}"
+    limit = _rate_limit_for_path(path, method)
+    async with _RATE_LOCK:
+        now = time.time()
+        if key not in _RATE_STORE:
+            _RATE_STORE[key] = (0, now + _RATE_WINDOW_SEC)
+        count, window_end = _RATE_STORE[key]
+        if now >= window_end:
+            count, window_end = 0, now + _RATE_WINDOW_SEC
+            _RATE_STORE[key] = (count, window_end)
+        if count >= limit:
+            retry_after = int(window_end - now) + 1
+            # Standard 429 body and Retry-After header (RFC 6585) — no sensitive info in response
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Too many requests. Please slow down.",
+                    "retry_after_seconds": retry_after,
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
+        _RATE_STORE[key] = (count + 1, window_end)
+    return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# App + CORS (A05 Misconfiguration) + Rate limit
+# Production: set allow_origins to your frontend only (e.g. ["https://tradeky.in"]).
 # ---------------------------------------------------------------------------
 app = FastAPI(title="Tradeky Backend")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Restrict in production to known frontend origin(s)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.middleware("http")(_rate_limit_middleware)
 
 # ---------------------------------------------------------------------------
 # OpenAI
@@ -259,24 +342,54 @@ def _batch_quotes(symbols: List[str]) -> Dict[str, Optional[Dict]]:
 
 
 # ---------------------------------------------------------------------------
-# Pydantic models
 # ---------------------------------------------------------------------------
+# Request validation (OWASP A03 Injection, A04 Insecure Design)
+# - extra="forbid": reject unknown JSON keys to avoid mass assignment / parameter pollution.
+# - Length limits and patterns reduce injection and oversized payload risk.
+# - All request bodies and query/path params are validated; invalid input returns 422.
+# ---------------------------------------------------------------------------
+_STRICT = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+def _ticker_validator(v: str) -> str:
+    if not v or len(v) > 32:
+        raise ValueError("ticker must be 1–32 characters")
+    return v.upper().strip()
+
+def _symbol_validator(v: str) -> str:
+    if not v or len(v) > 32:
+        raise ValueError("symbol must be 1–32 characters")
+    return v.upper().strip()
+
+
 class BacktestRequest(BaseModel):
-    ticker: str
-    prompt: str
+    model_config = _STRICT
+    ticker: str = Field(..., min_length=1, max_length=32)
+    prompt: str = Field(..., min_length=1, max_length=8000)
+
+    @field_validator("ticker")
+    @classmethod
+    def ticker_validate(cls, v: str) -> str:
+        return _ticker_validator(v)
 
 
 class BacktestResponse(BaseModel):
+    model_config = _STRICT
     metrics:        Dict[str, float]
     chart_data:     List[Dict[str, Any]]
     generated_code: str
 
 
 class TradeRequest(BaseModel):
-    symbol:      str
-    side:        str           # "buy" or "sell"
-    quantity:    int
-    strategy_id: Optional[str] = None
+    model_config = _STRICT
+    symbol:      str = Field(..., min_length=1, max_length=32)
+    side:        str = Field(..., pattern="^(?i)buy|sell$")
+    quantity:    int = Field(..., ge=1, le=1_000_000)
+    strategy_id: Optional[str] = Field(None, max_length=64)
+
+    @field_validator("symbol")
+    @classmethod
+    def symbol_validate(cls, v: str) -> str:
+        return _symbol_validator(v)
 
 
 class TradeResponse(BaseModel):
@@ -305,7 +418,7 @@ async def root():
 # /debug/{ticker}  — quick sanity-check endpoint
 # ---------------------------------------------------------------------------
 @app.get("/debug/{ticker}")
-async def debug_ticker(ticker: str):
+async def debug_ticker(ticker: str = Path(..., min_length=1, max_length=32)):
     sym   = normalise(ticker)
     v8    = _yahoo_v8(sym, range_="5d", interval="1d")
     yhist = _yf_history(sym, period="5d", interval="1d")
@@ -322,7 +435,7 @@ async def debug_ticker(ticker: str):
 # /quote/{ticker}
 # ---------------------------------------------------------------------------
 @app.get("/quote/{ticker}")
-async def get_quote(ticker: str):
+async def get_quote(ticker: str = Path(..., min_length=1, max_length=32)):
     ticker = ticker.replace("%20", " ").strip()
     key    = ticker.upper()
     now    = time.time()
@@ -366,8 +479,8 @@ async def get_quote(ticker: str):
 # /quotes  — batch
 # ---------------------------------------------------------------------------
 @app.get("/quotes")
-async def get_quotes_batch(tickers: str):
-    symbols_raw = [s.strip() for s in tickers.split(",") if s.strip()]
+async def get_quotes_batch(tickers: str = Query(..., min_length=1, max_length=400)):
+    symbols_raw = [s.strip() for s in tickers.split(",") if s.strip()][:20]
     if not symbols_raw:
         return []
 
@@ -404,7 +517,11 @@ async def get_quotes_batch(tickers: str):
 #   3. If still empty → return []  with market_closed=true
 # ---------------------------------------------------------------------------
 @app.get("/candles/{ticker}")
-async def get_candles(ticker: str, period: str = "1d", interval: str = "5m"):
+async def get_candles(
+    ticker: str = Path(..., min_length=1, max_length=32),
+    period: str = Query("1d", pattern="^(1d|5d|1mo|3mo|6mo|1y|2y)$"),
+    interval: str = Query("5m", pattern="^(1m|5m|15m|1d)$"),
+):
     ticker = ticker.replace("%20", " ").strip()
     key    = f"{ticker.upper()}_{period}_{interval}"
     now    = time.time()
@@ -461,7 +578,7 @@ async def get_candles(ticker: str, period: str = "1d", interval: str = "5m"):
 # /chart/{ticker}  — legacy area-chart endpoint
 # ---------------------------------------------------------------------------
 @app.get("/chart/{ticker}")
-async def get_chart(ticker: str):
+async def get_chart(ticker: str = Path(..., min_length=1, max_length=32)):
     ticker = ticker.replace("%20", " ").strip()
     key    = f"chart_{ticker.upper()}"
     now    = time.time()
@@ -554,7 +671,7 @@ Requirements:
             raise HTTPException(500, "OpenAI quota exceeded.")
         raise HTTPException(500, f"OpenAI error: {err_str}")
 
-    # ── Sandboxed execution — uses module-level _SAFE_BUILTINS ────────────────
+    # OWASP A03 Injection: run AI-generated code in a restricted namespace (no open/import/eval/exec in user code)
     try:
         g: Dict[str, Any] = {
             "__builtins__": _SAFE_BUILTINS,
@@ -566,22 +683,15 @@ Requirements:
         try:
             exec(code, g, loc)                                           # noqa: S102
         except NameError as exc:
-            blocked = str(exc)
-            print(f"[Backtest][SANDBOX] NameError blocked: {blocked}")
-            raise HTTPException(
-                400,
-                f"Malicious or unsupported code detected (blocked built-in): {blocked}",
-            )
+            # Log server-side only; return generic message (OWASP: avoid leaking internals)
+            print(f"[Backtest][SANDBOX] NameError blocked: {exc}")
+            raise HTTPException(400, "Strategy code used a disallowed built-in or name.")
         except TypeError as exc:
-            blocked = str(exc)
-            print(f"[Backtest][SANDBOX] TypeError blocked: {blocked}")
-            raise HTTPException(
-                400,
-                f"Malicious or unsupported code detected (type error): {blocked}",
-            )
+            print(f"[Backtest][SANDBOX] TypeError blocked: {exc}")
+            raise HTTPException(400, "Strategy code used a disallowed built-in or name.")
         except ImportError as exc:
             print(f"[Backtest][SANDBOX] ImportError blocked: {exc}")
-            raise HTTPException(400, "Malicious or unsupported code detected (import attempt blocked).")
+            raise HTTPException(400, "Strategy code used a disallowed built-in or name.")
 
         if "strategy" not in loc:
             raise HTTPException(500, "Generated code has no 'strategy' function.")
@@ -809,7 +919,8 @@ _RUNNING_BOTS: Dict[str, asyncio.Task] = {}   # bot_id → asyncio Task
 _BOT_META:     Dict[str, Dict]         = {}   # bot_id → {user_id, symbol, qty, strategy_id, title, started_at}
 
 # ---------------------------------------------------------------------------
-# _SAFE_BUILTINS  — module-level sandbox; shared by /backtest AND bot_worker
+# _SAFE_BUILTINS — OWASP A03 Injection: restricted builtins for exec() sandbox
+# Used by /backtest and bot_worker. Blocks open, import, eval, exec, globals, etc.
 # ---------------------------------------------------------------------------
 _SAFE_BUILTINS: Dict[str, Any] = {
     "abs": abs, "min": min, "max": max, "sum": sum, "round": round,
@@ -949,45 +1060,93 @@ def _mem_cancel_pending(user_id: str, order_id: str) -> bool:
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
+def _user_id_validator(v: str) -> str:
+    if not v or len(v) > 128:
+        raise ValueError("user_id must be 1–128 characters")
+    return v.strip()
+
+
 class PaperTradeRequest(BaseModel):
-    user_id:     str
-    symbol:      str
-    quantity:    int
-    side:        str                       # "buy" | "sell"
-    strategy_id: Optional[str]  = None
-    price:       Optional[float] = None   # manual price override (market orders)
-    order_type:  str             = "market"  # "market" | "limit"
-    limit_price: Optional[float] = None   # required when order_type == "limit"
+    model_config = _STRICT
+    user_id:     str = Field(..., min_length=1, max_length=128)
+    symbol:      str = Field(..., min_length=1, max_length=32)
+    quantity:    int = Field(..., ge=1, le=1_000_000)
+    side:        str = Field(..., pattern="^(?i)buy|sell$")
+    strategy_id: Optional[str] = Field(None, max_length=64)
+    price:       Optional[float] = Field(None, ge=0, le=1e9)
+    order_type:  str = Field(default="market", pattern="^(?i)market|limit$")
+    limit_price: Optional[float] = Field(None, ge=0, le=1e9)
+
+    @field_validator("user_id")
+    @classmethod
+    def uid(cls, v: str) -> str:
+        return _user_id_validator(v)
+
+    @field_validator("symbol")
+    @classmethod
+    def sym(cls, v: str) -> str:
+        return _symbol_validator(v)
 
 
 class CancelOrderRequest(BaseModel):
-    user_id:  str
-    order_id: str
+    model_config = _STRICT
+    user_id:  str = Field(..., min_length=1, max_length=128)
+    order_id: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator("user_id")
+    @classmethod
+    def uid(cls, v: str) -> str:
+        return _user_id_validator(v)
 
 
 class SquareOffRequest(BaseModel):
-    user_id: str
+    model_config = _STRICT
+    user_id: str = Field(..., min_length=1, max_length=128)
+
+    @field_validator("user_id")
+    @classmethod
+    def uid(cls, v: str) -> str:
+        return _user_id_validator(v)
 
 
 class PaperRestoreRequest(BaseModel):
-    user_id:   str
-    balance:   float
-    positions: List[Dict] = []
-    day_pnl:   float = 0.0
+    model_config = _STRICT
+    user_id:   str = Field(..., min_length=1, max_length=128)
+    balance:   float = Field(..., ge=0, le=1e10)
+    positions: List[Dict] = Field(default_factory=list, max_length=500)
+    day_pnl:   float = Field(default=0.0, ge=-1e10, le=1e10)
+
+    @field_validator("user_id")
+    @classmethod
+    def uid(cls, v: str) -> str:
+        return _user_id_validator(v)
 
 
 class DeployBotRequest(BaseModel):
-    user_id:     str
-    strategy_id: str
-    symbol:      str
-    quantity:    int
-    title:       str = ""   # display name, passed from frontend
+    model_config = _STRICT
+    user_id:     str = Field(..., min_length=1, max_length=128)
+    strategy_id: str = Field(..., min_length=1, max_length=64)
+    symbol:      str = Field(..., min_length=1, max_length=32)
+    quantity:    int = Field(..., ge=1, le=1_000_000)
+    title:       str = Field(default="", max_length=256)
+
+    @field_validator("user_id")
+    @classmethod
+    def uid(cls, v: str) -> str:
+        return _user_id_validator(v)
+
+    @field_validator("symbol")
+    @classmethod
+    def sym(cls, v: str) -> str:
+        return _symbol_validator(v)
 
 
 # ---------------------------------------------------------------------------
-# POST /api/paper-trading/restore
-#   Frontend calls this on page-load to re-seed in-memory state from
-#   whatever was previously saved in localStorage.
+# Paper trading API (OWASP A01 Access Control)
+# user_id is client-supplied; acceptable for demo/paper only. For real trading,
+# enforce server-side auth (e.g. JWT) and derive user_id from the token.
+# ---------------------------------------------------------------------------
+# POST /api/paper-trading/restore — re-seed in-memory state from frontend localStorage
 # ---------------------------------------------------------------------------
 @app.post("/api/paper-trading/restore")
 async def restore_paper_account(req: PaperRestoreRequest):
@@ -1019,9 +1178,7 @@ async def restore_paper_account(req: PaperRestoreRequest):
 # GET /api/paper-trading/account?user_id=
 # ---------------------------------------------------------------------------
 @app.get("/api/paper-trading/account")
-async def get_paper_account(user_id: str):
-    if not user_id:
-        raise HTTPException(400, "user_id required")
+async def get_paper_account(user_id: str = Query(..., min_length=1, max_length=128)):
 
     balance   = _mem_get_balance(user_id)
     positions = _mem_get_positions(user_id)
@@ -1452,7 +1609,10 @@ async def paper_execute(req: PaperTradeRequest):
 # GET /api/paper-trading/logs?user_id=&limit=
 # ---------------------------------------------------------------------------
 @app.get("/api/paper-trading/logs")
-async def get_paper_logs(user_id: str, limit: int = 500):
+async def get_paper_logs(
+    user_id: str = Query(..., min_length=1, max_length=128),
+    limit: int = Query(500, ge=1, le=1000),
+):
     if not user_id:
         raise HTTPException(400, "user_id required")
     return _mem_get_logs(user_id)[:limit]
@@ -1462,7 +1622,7 @@ async def get_paper_logs(user_id: str, limit: int = 500):
 # GET /api/paper-trading/pending-orders?user_id=
 # ---------------------------------------------------------------------------
 @app.get("/api/paper-trading/pending-orders")
-async def get_pending_orders(user_id: str):
+async def get_pending_orders(user_id: str = Query(..., min_length=1, max_length=128)):
     if not user_id:
         raise HTTPException(400, "user_id required")
     return _mem_get_pending(user_id)
@@ -1781,7 +1941,8 @@ async def deploy_bot(req: DeployBotRequest):
 # POST /api/paper-trading/stop-bot   — stop a single bot by bot_id
 # ---------------------------------------------------------------------------
 class StopBotRequest(BaseModel):
-    bot_id: str
+    model_config = _STRICT
+    bot_id: str = Field(..., min_length=1, max_length=64)
 
 
 @app.post("/api/paper-trading/stop-bot")
@@ -1814,7 +1975,7 @@ async def stop_all_bots():
 # GET /api/paper-trading/running-bots   — frontend polls this for live status
 # ---------------------------------------------------------------------------
 @app.get("/api/paper-trading/running-bots")
-async def get_running_bots(user_id: str):
+async def get_running_bots(user_id: str = Query(..., min_length=1, max_length=128)):
     bots = [
         {**meta, "bot_id": bid, "running": not _RUNNING_BOTS[bid].done()}
         for bid, meta in _BOT_META.items()
@@ -1911,12 +2072,18 @@ async def community_websocket(websocket: WebSocket, channel: str = "general"):
 # ===========================================================================
 
 class GreedAIRequest(BaseModel):
-    strategy_title: str
-    symbol:         str
-    qty:            int
-    pnl:            float
-    live_price:     float
-    side:           str = "buy"   # "buy" | "sell" — position direction
+    model_config = _STRICT
+    strategy_title: str = Field(..., min_length=1, max_length=256)
+    symbol:         str = Field(..., min_length=1, max_length=32)
+    qty:            int = Field(..., ge=0, le=1_000_000)
+    pnl:            float = Field(..., ge=-1e12, le=1e12)
+    live_price:     float = Field(..., ge=0, le=1e9)
+    side:           str = Field(default="buy", pattern="^(?i)buy|sell$")
+
+    @field_validator("symbol")
+    @classmethod
+    def sym(cls, v: str) -> str:
+        return _symbol_validator(v)
 
 
 class GreedAIResponse(BaseModel):
@@ -2125,11 +2292,27 @@ _USERNAME_COOLDOWN_DAYS = 14
 
 
 class ProfileUpdate(BaseModel):
-    user_id:             str
-    username:            str
+    model_config = _STRICT
+    user_id:             str = Field(..., min_length=1, max_length=128)
+    username:            str = Field(..., min_length=1, max_length=30)
     strategy_alerts:     bool = True
     market_updates:      bool = True
     community_mentions:  bool = True
+
+    @field_validator("user_id")
+    @classmethod
+    def uid(cls, v: str) -> str:
+        return _user_id_validator(v)
+
+    @field_validator("username")
+    @classmethod
+    def uname(cls, v: str) -> str:
+        v = (v or "").strip()
+        if len(v) < 3 or len(v) > 30:
+            raise ValueError("Username must be 3–30 characters")
+        if not re.match(r"^[a-zA-Z0-9_]+$", v):
+            raise ValueError("Username: letters, numbers and underscores only")
+        return v
 
 
 def _username_taken(username: str, exclude_user_id: str) -> bool:
@@ -2161,10 +2344,8 @@ def _cooldown_remaining(username_changed_at: Optional[str]) -> Optional[int]:
 
 
 @app.get("/api/user/profile")
-async def get_user_profile(user_id: str):
+async def get_user_profile(user_id: str = Query(..., min_length=1, max_length=128)):
     """Return username + notification preferences + cooldown info."""
-    if not user_id:
-        raise HTTPException(400, "user_id required")
     rows = _sb_get(
         "profiles",
         filters={"user_id": f"eq.{user_id}"},
@@ -2188,7 +2369,10 @@ async def get_user_profile(user_id: str):
 
 
 @app.get("/api/user/check-username")
-async def check_username_endpoint(username: str, user_id: str):
+async def check_username_endpoint(
+    username: str = Query(..., min_length=1, max_length=30),
+    user_id: str = Query(..., min_length=1, max_length=128),
+):
     """
     Real-time availability check.
     Returns { "available": bool, "reason": str }
@@ -2215,9 +2399,6 @@ async def update_user_profile(req: ProfileUpdate):
     Returns { "ok": true, "username_changed_at": <iso> } on success,
     or raises HTTP 400/409/423.
     """
-    if not req.user_id:
-        raise HTTPException(400, "user_id required")
-
     username = req.username.strip()
 
     # ── 1. Format ─────────────────────────────────────────────────────────────
@@ -2275,14 +2456,18 @@ async def update_user_profile(req: ProfileUpdate):
 # Notifications — GET & mark-read
 # ---------------------------------------------------------------------------
 class NotificationMarkRead(BaseModel):
-    user_id: str
+    model_config = _STRICT
+    user_id: str = Field(..., min_length=1, max_length=128)
+
+    @field_validator("user_id")
+    @classmethod
+    def uid(cls, v: str) -> str:
+        return _user_id_validator(v)
 
 
 @app.get("/api/notifications")
-async def get_notifications(user_id: str):
+async def get_notifications(user_id: str = Query(..., min_length=1, max_length=128)):
     """Return the latest 20 notifications for the user, newest first."""
-    if not user_id:
-        raise HTTPException(400, "user_id required")
     rows = _sb_get(
         "notifications",
         filters={"user_id": f"eq.{user_id}"},

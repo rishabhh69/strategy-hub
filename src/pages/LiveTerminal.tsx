@@ -16,6 +16,16 @@ import { toast }              from "sonner";
 import { supabase }           from "@/integrations/supabase/client";
 
 import { API_BASE } from "@/lib/api";
+
+/** Normalize API error detail (FastAPI 422 returns detail as array of { msg }). */
+function apiErrorMsg(detail: unknown, fallback: string): string {
+  if (Array.isArray(detail)) {
+    const first = (detail as { msg?: string }[]).map((e) => e.msg).filter(Boolean)[0];
+    return first ?? fallback;
+  }
+  return typeof detail === "string" ? detail : fallback;
+}
+
 const STARTING_CAPITAL = 1_00_000;          // ₹1,00,000
 const PAPER_VERSION   = "v3";              // bump when PersistedPaper schema changes
 
@@ -612,7 +622,7 @@ export default function LiveTerminal() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(err.detail ?? `HTTP ${res.status}`);
+        throw new Error(apiErrorMsg(err.detail, `HTTP ${res.status}`));
       }
       const data = await res.json();
       const now  = new Date().toLocaleTimeString("en-IN", { hour12: false });
@@ -662,7 +672,7 @@ export default function LiveTerminal() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId, symbol: pos.symbol, quantity: pos.quantity, side: "sell" }),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(e.detail); }
+      if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(apiErrorMsg(e.detail, "Close failed")); }
       const data = await res.json();
       const now  = new Date().toLocaleTimeString("en-IN", { hour12: false });
       setOrderLog(prev => [{ time: now, type: "trade", action: "sell", message: data.message, pnl: data.realized_pnl }, ...prev]);
@@ -683,7 +693,7 @@ export default function LiveTerminal() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId, order_id: orderId }),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(e.detail); }
+      if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(apiErrorMsg(e.detail, "Cancel failed")); }
       setPendingOrders(prev => prev.filter(o => o.id !== orderId));
       const now = new Date().toLocaleTimeString("en-IN", { hour12: false });
       setOrderLog(prev => [{ time: now, type: "system", message: `Limit order cancelled: ${orderId.slice(0, 8)}…` }, ...prev]);
@@ -702,7 +712,7 @@ export default function LiveTerminal() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId }),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(e.detail); }
+      if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(apiErrorMsg(e.detail, "Square off failed")); }
       const data = await res.json();
       if (data.new_balance !== undefined) setPaperBalance(data.new_balance);
       if (data.new_day_pnl !== undefined) setDayPnl(data.new_day_pnl);
@@ -734,7 +744,7 @@ export default function LiveTerminal() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(err.detail ?? `HTTP ${res.status}`);
+        throw new Error(apiErrorMsg(err.detail, `HTTP ${res.status}`));
       }
       const data = await res.json();
       const bot_id = data.bot_id as string;
