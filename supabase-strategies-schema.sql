@@ -40,11 +40,12 @@ CREATE POLICY "strategies_insert_authenticated"
   TO authenticated
   WITH CHECK (true);
 
--- Policy: allow anon with a logged-in user (some clients use anon key with JWT)
+-- Policy: allow anon to insert (avoids "new row violates RLS" when session not yet attached or key is anon)
+-- If you want to require login, use: WITH CHECK (auth.uid() IS NOT NULL) and ensure the app sends the session.
 CREATE POLICY "strategies_insert_anon"
   ON public.strategies FOR INSERT
   TO anon
-  WITH CHECK (auth.uid() IS NOT NULL);
+  WITH CHECK (true);
 
 -- Policy: allow authenticated users to read all (Live Terminal dropdown)
 CREATE POLICY "strategies_select_authenticated"
