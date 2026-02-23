@@ -95,8 +95,11 @@ export function CodeViewer({ code }: CodeViewerProps) {
         </Button>
       </div>
       
-      {/* Single scroll container: flex-1 min-h-0 so it gets bounded height and scrolls internally */}
-      <div className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-auto rounded-none border-t border-border bg-background">
+      {/* Fixed-height scroll container so vertical scroll always works (flex was collapsing) */}
+      <div
+        className="w-full overflow-x-auto rounded-none border-t border-border bg-background"
+        style={{ height: '480px', overflowY: 'scroll' }}
+      >
         <div className="min-w-max">
           <pre
             className="font-mono text-sm text-foreground leading-relaxed m-0 whitespace-pre"
