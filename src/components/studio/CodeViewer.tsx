@@ -95,28 +95,30 @@ export function CodeViewer({ code }: CodeViewerProps) {
         </Button>
       </div>
       
-      {/* Scroll container: fixed max height and overflow-y-auto; inner content has no height limit */}
-      <div className="flex-1 min-h-0 max-h-[500px] overflow-y-auto overflow-x-hidden p-4 bg-background min-w-0">
-        <pre className="font-mono text-sm text-foreground leading-relaxed block w-full m-0 p-0">
-          {generatedCode.split('\n').map((line, index) => (
-            <div key={index} className="flex min-w-0">
-              <span className="w-10 flex-shrink-0 text-muted-foreground/50 select-none text-right pr-4">
-                {index + 1}
-              </span>
-              <code className={
-                line.trimStart().startsWith('#') || line.trimStart().startsWith('"""') || line.includes('"""')
-                  ? 'text-muted-foreground'
-                  : line.includes('def ') || line.includes('import ') || line.includes('from ')
-                    ? 'text-primary'
-                    : line.includes("'") || line.includes('"')
-                      ? 'text-profit'
-                      : ''
-              }>
-                {line || ' '}
-              </code>
-            </div>
-          ))}
-        </pre>
+      {/* Scrollable area: vertical and horizontal, fixed height so full code is visible by scrolling */}
+      <div className="h-[500px] w-full overflow-auto rounded-none border-t border-border bg-background">
+        <div className="p-4 min-w-max">
+          <pre className="font-mono text-sm text-foreground leading-relaxed m-0 p-0 whitespace-pre">
+            {generatedCode.split('\n').map((line, index) => (
+              <div key={index} className="flex">
+                <span className="w-10 flex-shrink-0 text-muted-foreground/50 select-none text-right pr-4">
+                  {index + 1}
+                </span>
+                <code className={
+                  line.trimStart().startsWith('#') || line.trimStart().startsWith('"""') || line.includes('"""')
+                    ? 'text-muted-foreground'
+                    : line.includes('def ') || line.includes('import ') || line.includes('from ')
+                      ? 'text-primary'
+                      : line.includes("'") || line.includes('"')
+                        ? 'text-profit'
+                        : ''
+                }>
+                  {line || ' '}
+                </code>
+              </div>
+            ))}
+          </pre>
+        </div>
       </div>
     </div>
   );
