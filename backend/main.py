@@ -681,11 +681,18 @@ Requirements:
 7. Return the modified DataFrame.
 8. Output only executable Python code, no markdown, no comments that contain code.
 """
+    system_content = """You are a Python trading strategy expert.
+
+Strict performance rules (you must follow these):
+- NEVER use for loops, .iterrows(), .iloc, or .at to iterate through the DataFrame. These operations are strictly forbidden.
+- You must exclusively use Pandas vectorized operations (e.g., np.where, bitwise operators & and |, and .shift()) for all signal generation and condition checking.
+- To calculate the holding state for the position column, map the signals and use vectorized forward filling like .replace(0, np.nan).ffill().fillna(0).
+- Return ONLY the executable def strategy(data): Python function. Do not change the required inputs or outputs of this function."""
     try:
         resp = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a Python trading strategy expert."},
+                {"role": "system", "content": system_content},
                 {"role": "user",   "content": strategy_prompt},
             ],
             temperature=0.3,
