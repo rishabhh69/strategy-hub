@@ -774,6 +774,8 @@ Return ONLY the raw executable Python code. No markdown formatting, no backticks
             result_df["strategy_returns"] = pos_col.shift(1) * result_df["returns"]
 
         equity      = result_df["equity"].dropna()
+        if len(equity) == 0:
+            raise HTTPException(500, "Strategy produced no equity series.")
         initial     = equity.iloc[0]
         final      = equity.iloc[-1]
         days_n     = (result_df["date"].iloc[-1] - result_df["date"].iloc[0]).days
@@ -825,41 +827,43 @@ Return ONLY the raw executable Python code. No markdown formatting, no backticks
 
         if "position" in result_df.columns:
             pos = result_df["position"].fillna(0)
-            num_trades = int((pos.diff().fillna(0).abs() > 0).sum())
+            # num_trades = count of completed round-trips (position crosses to 0)
+            pos_prev = pos.shift(1).fillna(0)
+            num_trades = int(((pos == 0) & (pos_prev != 0)).sum())
 
-        # Win rate: % of completed round-trip trades that were profitable
-        win_rate: Optional[float] = None
+        # Win rate: (trades with PnL > 0) / (total completed round-trip trades) * 100; 0% if no trades
+        win_rate = 0.0
         if "position" in result_df.columns and "equity" in result_df.columns:
             pos = result_df["position"].fillna(0)
             eq = result_df["equity"]
             trade_pnls: List[float] = []
-            in_trade = False
-            start_idx: Optional[int] = None
-            direction = 0
-            for i in range(len(result_df)):
-                p = pos.iloc[i]
-                if p != 0:
-                    if not in_trade:
-                        in_trade = True
-                        start_idx = i
-                        direction = int(p) if p in (1, -1) else (1 if p > 0 else -1)
-                else:
-                    if in_trade and start_idx is not None:
-                        eq_start = float(eq.iloc[start_idx])
-                        eq_end = float(eq.iloc[i - 1])
-                        pnl = (eq_end - eq_start) * direction
-                        trade_pnls.append(pnl)
-                        in_trade = False
-            if in_trade and start_idx is not None:
-                eq_start = float(eq.iloc[start_idx])
-                eq_end = float(eq.iloc[-1])
-                pnl = (eq_end - eq_start) * direction
-                trade_pnls.append(pnl)
+            n = len(result_df)
+            for i in range(n):
+                p = float(pos.iloc[i]) if pd.notna(pos.iloc[i]) else 0.0
+                p_prev = float(pos.iloc[i - 1]) if i > 0 and pd.notna(pos.iloc[i - 1]) else 0.0
+                # Entry: position changed from 0 to non-zero
+                if p != 0 and (i == 0 or p_prev == 0):
+                    start_idx = i
+                    direction = 1 if p > 0 else -1
+                    # Find exit: next bar where position goes to 0
+                    for j in range(i + 1, n + 1):
+                        if j == n:
+                            # End of series: close at last bar
+                            eq_start = float(eq.iloc[start_idx])
+                            eq_end = float(eq.iloc[-1])
+                            pnl = (eq_end - eq_start) * direction
+                            trade_pnls.append(pnl)
+                            break
+                        p_j = float(pos.iloc[j]) if pd.notna(pos.iloc[j]) else 0.0
+                        if p_j == 0:
+                            eq_start = float(eq.iloc[start_idx])
+                            eq_end = float(eq.iloc[j])  # equity at close of bar where we flatten
+                            pnl = (eq_end - eq_start) * direction
+                            trade_pnls.append(pnl)
+                            break
             if len(trade_pnls) > 0:
                 wins = sum(1 for x in trade_pnls if x > 0)
                 win_rate = round(wins / len(trade_pnls) * 100, 2)
-        if win_rate is None:
-            win_rate = round(random.uniform(38.0, 62.0), 2)  # random mock when no completed trades
 
         # Fill missing/zero metrics with random mock data (different each backtest)
         if volatility is None or volatility == 0:
