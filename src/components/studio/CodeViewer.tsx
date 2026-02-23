@@ -68,8 +68,8 @@ export function CodeViewer({ code }: CodeViewerProps) {
   };
   
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-4 py-2 bg-muted/30 border-b border-border">
+    <div className="h-full min-h-0 flex flex-col">
+      <div className="flex items-center justify-between px-4 py-2 bg-muted/30 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-muted-foreground">strategy.py</span>
           <span className="text-xs px-1.5 py-0.5 rounded bg-profit/20 text-profit">Python</span>
@@ -95,7 +95,7 @@ export function CodeViewer({ code }: CodeViewerProps) {
         </Button>
       </div>
       
-      <div className="flex-1 overflow-auto p-4 bg-background">
+      <div className="flex-1 min-h-0 overflow-auto p-4 bg-background">
         <pre className="font-mono text-sm text-foreground leading-relaxed">
           {generatedCode.split('\n').map((line, index) => (
             <div key={index} className="flex">

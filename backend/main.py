@@ -687,7 +687,36 @@ Strict performance rules (you must follow these):
 - NEVER use for loops, .iterrows(), .iloc, or .at to iterate through the DataFrame. These operations are strictly forbidden.
 - You must exclusively use Pandas vectorized operations (e.g., np.where, bitwise operators & and |, and .shift()) for all signal generation and condition checking.
 - To calculate the holding state for the position column, map the signals and use vectorized forward filling like .replace(0, np.nan).ffill().fillna(0).
-- Return ONLY the executable def strategy(data): Python function. Do not change the required inputs or outputs of this function."""
+- Return ONLY the executable def strategy(data): Python function. Do not change the required inputs or outputs of this function.
+
+You are a quantitative developer. You MUST write purely vectorized Pandas code. NEVER use for loops, .iterrows(), .iloc, or .at. You must use .shift() to prevent lookahead bias. You must follow this EXACT architectural template for calculating signals, positions, and equity:
+
+def strategy(data):
+    # 1. Indicators
+    data['sma'] = data['close'].rolling(20).mean()
+
+    # 2. Vectorized Conditions (Use & and |)
+    buy_cond = (data['close'] > data['sma'])
+    sell_cond = (data['close'] < data['sma'])
+
+    # 3. Apply Signals
+    data['signal'] = 0
+    data.loc[buy_cond, 'signal'] = 1
+    data.loc[sell_cond, 'signal'] = -1
+
+    # 4. Position Management (Forward Fill to maintain hold state)
+    data['position'] = data['signal'].replace(0, np.nan).ffill().fillna(0)
+    data.loc[data['position'] == -1, 'position'] = 0  # Clean up exits
+
+    # 5. Equity Calculation (Strictly shift position by 1 to prevent lookahead bias)
+    initial_equity = 100000
+    market_returns = data['close'].pct_change()
+    strategy_returns = data['position'].shift(1) * market_returns
+    data['equity'] = initial_equity * (1 + strategy_returns.fillna(0)).cumprod()
+
+    return data
+
+You must adapt the user's plain-English logic into this exact vectorized framework without deviation."""
     try:
         resp = openai_client.chat.completions.create(
             model="gpt-4o",
