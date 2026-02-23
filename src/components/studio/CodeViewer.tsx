@@ -95,16 +95,20 @@ export function CodeViewer({ code }: CodeViewerProps) {
         </Button>
       </div>
       
-      {/* Immediate parent of <pre>: scroll container with max height; no overflow-hidden or pointer-events-none on pre/code */}
-      <div className="flex-1 min-h-0 flex flex-col rounded-none border-t border-border bg-background">
-        <div className="p-4 min-w-max overflow-y-auto overflow-x-auto max-h-[500px]">
-          <pre className="font-mono text-sm text-foreground leading-relaxed m-0 p-0 whitespace-pre">
-            {generatedCode.split('\n').map((line, index) => (
-              <div key={index} className="flex">
-                <span className="w-10 flex-shrink-0 text-muted-foreground/50 select-none text-right pr-4">
-                  {index + 1}
-                </span>
-                <code className={
+      {/* Scroll wrapper: only this div controls scrolling. Inner pre/code must not clip. */}
+      <div className="w-full max-h-[500px] overflow-y-auto overflow-x-auto rounded-none border-t border-border bg-background">
+        <div className="min-w-max">
+          <pre
+            className="font-mono text-sm text-foreground leading-relaxed m-0 whitespace-pre"
+            style={{ margin: 0, padding: '1rem', overflow: 'visible', height: 'max-content' }}
+          >
+          {generatedCode.split('\n').map((line, index) => (
+            <div key={index} className="flex">
+              <span className="w-10 flex-shrink-0 text-muted-foreground/50 select-none text-right pr-4">
+                {index + 1}
+              </span>
+              <code
+                className={
                   line.trimStart().startsWith('#') || line.trimStart().startsWith('"""') || line.includes('"""')
                     ? 'text-muted-foreground'
                     : line.includes('def ') || line.includes('import ') || line.includes('from ')
@@ -112,12 +116,14 @@ export function CodeViewer({ code }: CodeViewerProps) {
                       : line.includes("'") || line.includes('"')
                         ? 'text-profit'
                         : ''
-                }>
-                  {line || ' '}
-                </code>
-              </div>
-            ))}
-          </pre>
+                }
+                style={{ overflow: 'visible' }}
+              >
+                {line || ' '}
+              </code>
+            </div>
+          ))}
+        </pre>
         </div>
       </div>
     </div>
