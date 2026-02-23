@@ -188,9 +188,9 @@
     animation: pulse-glow 2s ease-in-out infinite;
   }
 
-  /* IDE split pane styles */
+  /* IDE split pane: no overflow-hidden so Code tab can scroll; panes scroll when content overflows */
   .ide-pane {
-    @apply bg-card border border-border rounded-lg overflow-hidden;
+    @apply bg-card border border-border rounded-lg;
   }
 
   .ide-header {

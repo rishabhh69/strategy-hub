@@ -253,8 +253,8 @@ Examples:
             </div>
           </div>
           
-          {/* Right Pane - Results */}
-          <div className="ide-pane flex flex-col">
+          {/* Right Pane - Results: overflow-auto so Code tab can scroll to full content */}
+          <div className="ide-pane flex flex-col overflow-auto">
             <Tabs defaultValue="performance" className="flex-1 flex flex-col">
               <div className="ide-header">
                 <TabsList className="bg-transparent h-auto p-0 gap-4">
