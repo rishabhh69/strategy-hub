@@ -95,9 +95,9 @@ export function CodeViewer({ code }: CodeViewerProps) {
         </Button>
       </div>
       
-      {/* Scrollable area: vertical and horizontal; fills available space so you can scroll to see full code */}
-      <div className="flex-1 min-h-[400px] overflow-auto rounded-none border-t border-border bg-background">
-        <div className="p-4 min-w-max">
+      {/* Immediate parent of <pre>: scroll container with max height; no overflow-hidden or pointer-events-none on pre/code */}
+      <div className="flex-1 min-h-0 flex flex-col rounded-none border-t border-border bg-background">
+        <div className="p-4 min-w-max overflow-y-auto overflow-x-auto max-h-[500px]">
           <pre className="font-mono text-sm text-foreground leading-relaxed m-0 p-0 whitespace-pre">
             {generatedCode.split('\n').map((line, index) => (
               <div key={index} className="flex">

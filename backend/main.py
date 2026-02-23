@@ -789,16 +789,39 @@ Return ONLY the raw executable Python code. No markdown formatting, no backticks
 
         ret = result_df["strategy_returns"].dropna()
         if len(ret) > 0:
-            vol_std = ret.std()
-            volatility = float(vol_std * np.sqrt(252) * 100) if pd.notna(vol_std) else 0.0
-            if vol_std and vol_std > 0:
-                sharpe = (ret.mean() / vol_std) * np.sqrt(252)
-            neg = ret[ret < 0]
-            downside_std = neg.std() if len(neg) > 1 and neg.std() and neg.std() > 0 else None
-            if downside_std and downside_std > 0:
-                sortino = (ret.mean() / downside_std) * np.sqrt(252)
-            elif vol_std and vol_std > 0:
-                sortino = (ret.mean() / vol_std) * np.sqrt(252)
+            # Daily returns (decimal). Use standard quant finance formulas.
+            daily_returns = ret
+            risk_free_rate = 0.0  # decimal, hardcoded for baseline accuracy
+
+            # Annualized volatility: daily_returns.std() * sqrt(252); display as percentage
+            vol_std_daily = daily_returns.std()
+            if pd.isna(vol_std_daily) or vol_std_daily <= 0:
+                annualized_vol = 0.0
+                volatility = 0.0
+            else:
+                annualized_vol = float(vol_std_daily * np.sqrt(252))
+                volatility = annualized_vol * 100.0  # for display as %
+
+            # CAGR in decimal for ratio formulas (cagr is in percentage)
+            cagr_decimal = (cagr / 100.0) if cagr is not None else 0.0
+
+            # Sharpe: (CAGR - Rf) / Annualized_Volatility; return 0 if vol is 0
+            if annualized_vol > 0:
+                sharpe = (cagr_decimal - risk_free_rate) / annualized_vol
+            else:
+                sharpe = 0.0
+
+            # Sortino: downside deviation using only negative daily returns
+            neg_returns = daily_returns[daily_returns < 0]
+            if len(neg_returns) > 1:
+                downside_std_daily = neg_returns.std()
+                if pd.notna(downside_std_daily) and downside_std_daily > 0:
+                    downside_dev = float(downside_std_daily * np.sqrt(252))
+                    sortino = (cagr_decimal - risk_free_rate) / downside_dev
+                else:
+                    sortino = 0.0
+            else:
+                sortino = 0.0
 
         if "position" in result_df.columns:
             pos = result_df["position"].fillna(0)
