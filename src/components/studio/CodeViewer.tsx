@@ -95,7 +95,7 @@ export function CodeViewer({ code }: CodeViewerProps) {
         </Button>
       </div>
       
-      <div className="flex-1 min-h-0 overflow-auto p-4 bg-background">
+      <div className="flex-1 min-h-0 max-h-[500px] overflow-y-auto p-4 bg-background">
         <pre className="font-mono text-sm text-foreground leading-relaxed">
           {generatedCode.split('\n').map((line, index) => (
             <div key={index} className="flex">

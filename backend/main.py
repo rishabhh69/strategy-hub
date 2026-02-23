@@ -717,13 +717,18 @@ def strategy(data):
     return data
 
 You must adapt the user's plain-English logic into this exact vectorized framework without deviation."""
+    # Single system message first (vectorization rules); then user prompt. No other system messages.
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": strategy_prompt},
+    ]
+    print("[OpenAI] Request payload: roles =", [m["role"] for m in messages])
+    print("[OpenAI] System message length:", len(messages[0]["content"]) if messages else 0)
+    logging.info("OpenAI strategy generation: %d messages, system content length=%d", len(messages), len(system_content))
     try:
         resp = openai_client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_content},
-                {"role": "user",   "content": strategy_prompt},
-            ],
+            messages=messages,
             temperature=0.3,
         )
         code = resp.choices[0].message.content.strip()
