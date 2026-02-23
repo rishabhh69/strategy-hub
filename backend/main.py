@@ -681,42 +681,43 @@ Requirements:
 7. Return the modified DataFrame.
 8. Output only executable Python code, no markdown, no comments that contain code.
 """
-    system_content = """You are a Python trading strategy expert.
+    system_content = """You are a Senior Quantitative Data Scientist writing high-frequency algorithmic trading code.
 
-Strict performance rules (you must follow these):
-- NEVER use for loops, .iterrows(), .iloc, or .at to iterate through the DataFrame. These operations are strictly forbidden.
-- You must exclusively use Pandas vectorized operations (e.g., np.where, bitwise operators & and |, and .shift()) for all signal generation and condition checking.
-- To calculate the holding state for the position column, map the signals and use vectorized forward filling like .replace(0, np.nan).ffill().fillna(0).
-- Return ONLY the executable def strategy(data): Python function. Do not change the required inputs or outputs of this function.
+ZERO TOLERANCE RULES:
 
-You are a quantitative developer. You MUST write purely vectorized Pandas code. NEVER use for loops, .iterrows(), .iloc, or .at. You must use .shift() to prevent lookahead bias. You must follow this EXACT architectural template for calculating signals, positions, and equity:
+You are STRICTLY FORBIDDEN from using the word for or while anywhere in your code. If you write a loop, the system will crash.
+
+You are STRICTLY FORBIDDEN from using .iloc, .loc (for single row indexing), .at, or .iterrows().
+
+You MUST write 100% vectorized code using pure Pandas and NumPy (np.where, bitwise & and |, .shift()).
+
+To maintain a position, you MUST use forward filling: data['position'] = data['signal'].replace(0, np.nan).ffill().fillna(0)
+
+You MUST shift the position by 1 to calculate equity to prevent lookahead bias.
+
+REQUIRED ARCHITECTURE:
 
 def strategy(data):
     # 1. Indicators
-    data['sma'] = data['close'].rolling(20).mean()
+    # [Your vectorized indicator math here]
 
-    # 2. Vectorized Conditions (Use & and |)
-    buy_cond = (data['close'] > data['sma'])
-    sell_cond = (data['close'] < data['sma'])
-
-    # 3. Apply Signals
+    # 2. Signals
     data['signal'] = 0
-    data.loc[buy_cond, 'signal'] = 1
-    data.loc[sell_cond, 'signal'] = -1
+    # [Your vectorized logic using np.where or bitwise operators]
+    # Example: data.loc[buy_condition, 'signal'] = 1
 
-    # 4. Position Management (Forward Fill to maintain hold state)
+    # 3. Position (STRICTLY USE THIS EXACT LINE)
     data['position'] = data['signal'].replace(0, np.nan).ffill().fillna(0)
-    data.loc[data['position'] == -1, 'position'] = 0  # Clean up exits
+    data.loc[data['position'] == -1, 'position'] = 0
 
-    # 5. Equity Calculation (Strictly shift position by 1 to prevent lookahead bias)
+    # 4. Equity (STRICTLY USE THIS EXACT MATH)
     initial_equity = 100000
-    market_returns = data['close'].pct_change()
-    strategy_returns = data['position'].shift(1) * market_returns
+    strategy_returns = data['position'].shift(1) * data['close'].pct_change()
     data['equity'] = initial_equity * (1 + strategy_returns.fillna(0)).cumprod()
 
     return data
 
-You must adapt the user's plain-English logic into this exact vectorized framework without deviation."""
+Return ONLY the raw executable Python code. No markdown formatting, no backticks, no explanations."""
     # Single system message first (vectorization rules); then user prompt. No other system messages.
     messages = [
         {"role": "system", "content": system_content},
@@ -729,7 +730,7 @@ You must adapt the user's plain-English logic into this exact vectorized framewo
         resp = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            temperature=0.3,
+            temperature=0,
         )
         code = resp.choices[0].message.content.strip()
         for prefix in ("```python", "```"):

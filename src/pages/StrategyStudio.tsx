@@ -394,7 +394,7 @@ Examples:
                 )}
               </TabsContent>
               
-              <TabsContent value="code" className="flex-1 m-0 overflow-hidden min-h-0 flex flex-col">
+              <TabsContent value="code" className="flex-1 m-0 min-h-0 flex flex-col overflow-visible">
                 {isRunning ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground p-4">
                     <div className="text-center">

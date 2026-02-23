@@ -68,7 +68,7 @@ export function CodeViewer({ code }: CodeViewerProps) {
   };
   
   return (
-    <div className="h-full min-h-0 flex flex-col">
+    <div className="h-full min-h-0 flex flex-col w-full">
       <div className="flex items-center justify-between px-4 py-2 bg-muted/30 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-muted-foreground">strategy.py</span>
@@ -95,10 +95,11 @@ export function CodeViewer({ code }: CodeViewerProps) {
         </Button>
       </div>
       
-      <div className="flex-1 min-h-0 max-h-[500px] overflow-y-auto p-4 bg-background">
-        <pre className="font-mono text-sm text-foreground leading-relaxed">
+      {/* Scroll container: fixed max height and overflow-y-auto; inner content has no height limit */}
+      <div className="flex-1 min-h-0 max-h-[500px] overflow-y-auto overflow-x-hidden p-4 bg-background min-w-0">
+        <pre className="font-mono text-sm text-foreground leading-relaxed block w-full m-0 p-0">
           {generatedCode.split('\n').map((line, index) => (
-            <div key={index} className="flex">
+            <div key={index} className="flex min-w-0">
               <span className="w-10 flex-shrink-0 text-muted-foreground/50 select-none text-right pr-4">
                 {index + 1}
               </span>
