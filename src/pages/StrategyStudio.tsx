@@ -352,7 +352,7 @@ Examples:
                 )}
               </TabsContent>
               
-              <TabsContent value="metrics" className="flex-1 m-0 p-4 overflow-auto">
+              <TabsContent value="metrics" className="flex-1 m-0 p-4">
                 {isRunning ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground">
                     <div className="text-center">
@@ -394,7 +394,7 @@ Examples:
                 )}
               </TabsContent>
               
-              <TabsContent value="code" className="flex-1 m-0 min-h-0 flex flex-col overflow-visible">
+              <TabsContent value="code" className="flex-1 m-0 min-h-0 flex flex-col overflow-auto">
                 {isRunning ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground p-4">
                     <div className="text-center">
