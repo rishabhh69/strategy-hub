@@ -485,7 +485,7 @@ export default function Community() {
   const [myUsername,      setMyUsername]      = useState<string>("");   // profile username
   const [userRole,        setUserRole]        = useState<"admin" | "retail" | "sebi_verified" | null>(null);
   const [canPostInExpert, setCanPostInExpert] = useState(false);
-  const [activeTab,       setActiveTab]       = useState("general");
+  const [activeTab,       setActiveTab]       = useState<"general" | "expert">("expert"); // default last in list; set to most recent by activity after load
 
   // ── Upvote & reply state ──────────────────────────────────────────────────
   const [upvoteCounts, setUpvoteCounts] = useState<Record<string, number>>({});
@@ -622,8 +622,15 @@ export default function Community() {
         setUserRole(role as "admin" | "retail" | "sebi_verified");
         setCanPostInExpert(role === "sebi_verified" || role === "admin");
 
-        await fetchMessages("general", setGeneralMessages);
-        await fetchMessages("expert",  setExpertMessages);
+        const [general, expert] = await Promise.all([
+          fetchMessagesReturn("general"),
+          fetchMessagesReturn("expert"),
+        ]);
+        setGeneralMessages(general);
+        setExpertMessages(expert);
+        const generalLatest = general.length > 0 ? new Date(general[0].created_at).getTime() : 0;
+        const expertLatest  = expert.length > 0  ? new Date(expert[0].created_at).getTime() : 0;
+        setActiveTab(expertLatest >= generalLatest ? "expert" : "general");
       } catch (error) {
         console.error("Error initializing user:", error);
       } finally {
@@ -642,11 +649,11 @@ export default function Community() {
           const enriched = await enrichMessage(payload.new as CommunityMessage);
           setGeneralMessages(prev => {
             if (prev.some(m => m.id === enriched.id)) return prev;
-            return [...prev, enriched];
+            return [enriched, ...prev];
           });
           setTimeout(() => {
             if (generalScrollRef.current)
-              generalScrollRef.current.scrollTop = generalScrollRef.current.scrollHeight;
+              generalScrollRef.current.scrollTop = 0;
           }, 0);
         })
       .subscribe();
@@ -658,11 +665,11 @@ export default function Community() {
           const enriched = await enrichMessage(payload.new as CommunityMessage);
           setExpertMessages(prev => {
             if (prev.some(m => m.id === enriched.id)) return prev;
-            return [...prev, enriched];
+            return [enriched, ...prev];
           });
           setTimeout(() => {
             if (expertScrollRef.current)
-              expertScrollRef.current.scrollTop = expertScrollRef.current.scrollHeight;
+              expertScrollRef.current.scrollTop = 0;
           }, 0);
         })
       .subscribe();
@@ -678,12 +685,26 @@ export default function Community() {
     try {
       const { data, error } = await supabase
         .from("community_messages").select("*").eq("channel", channel)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: false });
       if (error) throw error;
       const enriched = await Promise.all((data || []).map(enrichMessage));
       setSetter(enriched);
     } catch (error) {
       console.error(`Error fetching ${channel} messages:`, error);
+    }
+  };
+
+  /** Fetch and return enriched messages for a channel (used to pick default tab by latest activity). */
+  const fetchMessagesReturn = async (channel: string): Promise<EnrichedMessage[]> => {
+    try {
+      const { data, error } = await supabase
+        .from("community_messages").select("*").eq("channel", channel)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return await Promise.all((data || []).map(enrichMessage));
+    } catch (error) {
+      console.error(`Error fetching ${channel} messages:`, error);
+      return [];
     }
   };
 

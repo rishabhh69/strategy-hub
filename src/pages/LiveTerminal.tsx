@@ -20,11 +20,18 @@ import { API_BASE } from "@/lib/api";
 
 /** Normalize API error detail (FastAPI 422 returns detail as array of { msg }). */
 function apiErrorMsg(detail: unknown, fallback: string): string {
+  let msg: string;
   if (Array.isArray(detail)) {
-    const first = (detail as { msg?: string }[]).map((e) => e.msg).filter(Boolean)[0];
-    return first ?? fallback;
+    const first = (detail as { msg?: string; loc?: unknown[] }[]).map((e) => e.msg).filter(Boolean)[0];
+    msg = first ?? fallback;
+  } else {
+    msg = typeof detail === "string" ? detail : fallback;
   }
-  return typeof detail === "string" ? detail : fallback;
+  // Replace Pydantic's raw message with a friendly one (in case backend wasn't restarted)
+  if (/string should(r)? contain at least 1 character/i.test(msg) || /at least 1 character/i.test(msg)) {
+    return "Session not ready. Please refresh the page or sign in and try again.";
+  }
+  return msg;
 }
 
 const STARTING_CAPITAL = 1_00_000;          // ₹1,00,000
