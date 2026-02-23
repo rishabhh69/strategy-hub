@@ -526,10 +526,24 @@ export default function Community() {
 
   const generalScrollRef = useRef<HTMLDivElement>(null);
   const expertScrollRef  = useRef<HTMLDivElement>(null);
+  const generalBottomRef = useRef<HTMLDivElement>(null);
+  const expertBottomRef  = useRef<HTMLDivElement>(null);
 
   // ── WebSocket refs ────────────────────────────────────────────────────────
   const wsGeneral = useRef<WebSocket | null>(null);
   const wsExpert  = useRef<WebSocket | null>(null);
+
+  // Auto-scroll to bottom when messages load or new message is sent (WhatsApp-style)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (activeTab === "general") {
+        generalBottomRef.current?.scrollIntoView({ behavior: "auto" });
+      } else {
+        expertBottomRef.current?.scrollIntoView({ behavior: "auto" });
+      }
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [activeTab, generalMessages, expertMessages]);
 
   // ── WS connect / disconnect ───────────────────────────────────────────────
   useEffect(() => {
@@ -628,8 +642,8 @@ export default function Community() {
         ]);
         setGeneralMessages(general);
         setExpertMessages(expert);
-        const generalLatest = general.length > 0 ? new Date(general[0].created_at).getTime() : 0;
-        const expertLatest  = expert.length > 0  ? new Date(expert[0].created_at).getTime() : 0;
+        const generalLatest = general.length > 0 ? new Date(general[general.length - 1].created_at).getTime() : 0;
+        const expertLatest  = expert.length > 0  ? new Date(expert[expert.length - 1].created_at).getTime() : 0;
         setActiveTab(expertLatest >= generalLatest ? "expert" : "general");
       } catch (error) {
         console.error("Error initializing user:", error);
@@ -649,11 +663,10 @@ export default function Community() {
           const enriched = await enrichMessage(payload.new as CommunityMessage);
           setGeneralMessages(prev => {
             if (prev.some(m => m.id === enriched.id)) return prev;
-            return [enriched, ...prev];
+            return [...prev, enriched];
           });
           setTimeout(() => {
-            if (generalScrollRef.current)
-              generalScrollRef.current.scrollTop = 0;
+            generalBottomRef.current?.scrollIntoView({ behavior: "auto" });
           }, 0);
         })
       .subscribe();
@@ -665,11 +678,10 @@ export default function Community() {
           const enriched = await enrichMessage(payload.new as CommunityMessage);
           setExpertMessages(prev => {
             if (prev.some(m => m.id === enriched.id)) return prev;
-            return [enriched, ...prev];
+            return [...prev, enriched];
           });
           setTimeout(() => {
-            if (expertScrollRef.current)
-              expertScrollRef.current.scrollTop = 0;
+            expertBottomRef.current?.scrollIntoView({ behavior: "auto" });
           }, 0);
         })
       .subscribe();
@@ -685,7 +697,7 @@ export default function Community() {
     try {
       const { data, error } = await supabase
         .from("community_messages").select("*").eq("channel", channel)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: true });
       if (error) throw error;
       const enriched = await Promise.all((data || []).map(enrichMessage));
       setSetter(enriched);
@@ -699,7 +711,7 @@ export default function Community() {
     try {
       const { data, error } = await supabase
         .from("community_messages").select("*").eq("channel", channel)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: true });
       if (error) throw error;
       return await Promise.all((data || []).map(enrichMessage));
     } catch (error) {
@@ -854,6 +866,7 @@ export default function Community() {
                       />
                     ))
                   )}
+                  <div ref={generalBottomRef} aria-hidden="true" />
                 </div>
               </ScrollArea>
               <ChatInput
@@ -896,6 +909,7 @@ export default function Community() {
                       />
                     ))
                   )}
+                  <div ref={expertBottomRef} aria-hidden="true" />
                 </div>
               </ScrollArea>
               <ChatInput
