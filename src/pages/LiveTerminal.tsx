@@ -1268,11 +1268,11 @@ export default function LiveTerminal() {
                                 );
                               })()}
 
-                              {/* ── 3-col grid ── */}
-                              <div className="grid grid-cols-3 gap-2 mb-2.5">
+                              {/* ── 3-col grid: gap-4, overflow/truncate so MARKET and INSIGHT don't bleed ── */}
+                              <div className="grid grid-cols-3 gap-4 mb-2.5 min-w-0">
 
                                 {/* Col 1 — Validity */}
-                                <div className="flex flex-col gap-1">
+                                <div className="flex flex-col gap-1 min-w-0 px-2 py-1">
                                   <p className="text-[9px] text-muted-foreground/60 uppercase tracking-widest font-semibold">Validity</p>
                                   <div className="flex flex-col items-center gap-0.5">
                                     <span className={`text-xl font-bold font-data leading-none ${scoreColor}`}>
@@ -1283,35 +1283,33 @@ export default function LiveTerminal() {
                                       <div className={`h-full rounded-full transition-all duration-700 ${barColor}`}
                                         style={{ width: `${bot.healthScore}%` }} />
                                     </div>
-                                    <span className={`text-[8px] font-bold mt-0.5 tracking-wider ${scoreColor}`}>
+                                    <span className={`text-[8px] font-bold mt-0.5 tracking-wider truncate max-w-full ${scoreColor}`}>
                                       {bot.healthStatus?.toUpperCase()}
                                     </span>
                                   </div>
                                 </div>
 
                                 {/* Col 2 — Market Metrics */}
-                                <div className="flex flex-col gap-1">
+                                <div className="flex flex-col gap-1 min-w-0 overflow-hidden px-2 py-1">
                                   <p className="text-[9px] text-muted-foreground/60 uppercase tracking-widest font-semibold">Market</p>
                                   <div className="font-mono text-[9px] space-y-1.5">
-                                    <div className="flex flex-col">
+                                    <div className="flex flex-col min-w-0">
                                       <span className="text-muted-foreground/60">State</span>
-                                      <span className={`font-bold ${
-                                        bot.marketState === "TRENDING"  ? "text-profit" :
+                                      <span className={`font-bold truncate ${bot.marketState === "TRENDING"  ? "text-profit" :
                                         bot.marketState === "VOLATILE"  ? "text-yellow-400" :
                                                                           "text-foreground/70"
                                       }`}>{bot.marketState ?? "—"}</span>
                                     </div>
-                                    <div className="flex flex-col">
+                                    <div className="flex flex-col min-w-0">
                                       <span className="text-muted-foreground/60">Vol Z</span>
-                                      <span className={`font-bold ${
-                                        (bot.volZ ?? 0) >= 2   ? "text-loss" :
+                                      <span className={`font-bold truncate ${(bot.volZ ?? 0) >= 2   ? "text-loss" :
                                         (bot.volZ ?? 0) >= 1   ? "text-yellow-400" :
                                                                   "text-profit"
                                       }`}>{bot.volZ?.toFixed(2) ?? "—"}σ</span>
                                     </div>
-                                    <div className="flex flex-col">
+                                    <div className="flex flex-col min-w-0">
                                       <span className="text-muted-foreground/60">Chg</span>
-                                      <span className={`font-bold ${(bot.changePct ?? 0) >= 0 ? "text-profit" : "text-loss"}`}>
+                                      <span className={`font-bold truncate ${(bot.changePct ?? 0) >= 0 ? "text-profit" : "text-loss"}`}>
                                         {bot.changePct != null ? `${bot.changePct >= 0 ? "+" : ""}${bot.changePct.toFixed(2)}%` : "—"}
                                       </span>
                                     </div>
@@ -1319,9 +1317,9 @@ export default function LiveTerminal() {
                                 </div>
 
                                 {/* Col 3 — Insight */}
-                                <div className="flex flex-col gap-1">
+                                <div className="flex flex-col gap-1 min-w-0 overflow-hidden px-2 py-1">
                                   <p className="text-[9px] text-muted-foreground/60 uppercase tracking-widest font-semibold">Insight</p>
-                                  <p className="text-[9px] text-muted-foreground leading-tight">
+                                  <p className="text-[9px] text-muted-foreground leading-tight break-words overflow-hidden line-clamp-4">
                                     {bot.greedInsight ?? "Awaiting market data…"}
                                   </p>
                                 </div>
