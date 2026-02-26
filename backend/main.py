@@ -1308,6 +1308,52 @@ class DeployBotRequest(BaseModel):
         return _symbol_validator(v)
 
 
+class EquityPoint(BaseModel):
+    """
+    Downsampled equity curve point for SavedStrategy.
+    Kept very simple to avoid coupling to backtest engine internals.
+    """
+    time:  str
+    value: float
+
+
+class SaveStrategyRequest(BaseModel):
+    """
+    Payload for POST /api/strategies/save.
+    Note: we deliberately keep this separate from the core backtest engine.
+    """
+    model_config = _STRICT
+
+    user_id:      str = Field(..., min_length=1, max_length=128)
+    name:         str = Field(..., min_length=1, max_length=256)
+    description:  Optional[str] = Field(default=None, max_length=10_000)
+    code:         str = Field(..., min_length=1, max_length=200_000)
+    ticker:       str = Field(..., min_length=1, max_length=32)
+
+    # Metrics – all optional so frontend can omit fields it doesn't have.
+    cagr:          Optional[float] = None
+    total_return:  Optional[float] = None
+    max_drawdown:  Optional[float] = None
+    volatility:    Optional[float] = None
+    sharpe_ratio:  Optional[float] = None
+    sortino_ratio: Optional[float] = None
+    win_rate:      Optional[float] = None
+    total_trades:  Optional[int]   = Field(default=None, ge=0)
+
+    # Downsampled equity curve from the frontend (e.g. daily points).
+    equity_curve:  Optional[List[EquityPoint]] = None
+
+    @field_validator("user_id")
+    @classmethod
+    def uid(cls, v: str) -> str:
+        return _user_id_validator(v)
+
+    @field_validator("ticker")
+    @classmethod
+    def sym(cls, v: str) -> str:
+        return _symbol_validator(v)
+
+
 # ---------------------------------------------------------------------------
 # Paper trading API (OWASP A01 Access Control)
 # user_id is client-supplied; acceptable for demo/paper only. For real trading,
@@ -1361,6 +1407,90 @@ async def get_paper_account(user_id: str = Query(..., min_length=1, max_length=1
         "open_positions": len(positions),
         "positions":      positions,
     }
+
+
+# ---------------------------------------------------------------------------
+# Saved Strategies API (Supabase persistence only; does not touch engine)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/strategies/save")
+async def save_strategy(req: SaveStrategyRequest):
+    """
+    Save a successful backtest into the user's private library.
+    This only persists data to Supabase and does NOT execute any code.
+    """
+    if not req.user_id:
+        raise HTTPException(400, "user_id required")
+    if not _sb_ok():
+        raise HTTPException(503, "Supabase is unreachable. Cannot save strategy.")
+
+    payload: Dict[str, Any] = {
+        "user_id":      req.user_id,
+        "name":         req.name.strip(),
+        "description":  (req.description or "").strip() or None,
+        "code":         req.code,
+        "ticker":       req.ticker.upper(),
+        "cagr":         req.cagr,
+        "total_return": req.total_return,
+        "max_drawdown": req.max_drawdown,
+        "volatility":   req.volatility,
+        "sharpe_ratio": req.sharpe_ratio,
+        "sortino_ratio": req.sortino_ratio,
+        "win_rate":     req.win_rate,
+        "total_trades": req.total_trades,
+        # Store equity_curve as raw JSON list of {time, value}
+        "equity_curve": [pt.model_dump() for pt in (req.equity_curve or [])] or None,
+    }
+
+    row = _sb_insert("saved_strategies", payload)
+    if not row:
+        raise HTTPException(503, "Failed to save strategy to Supabase.")
+    return {"id": row.get("id"), "saved_strategy": row}
+
+
+@app.get("/api/strategies/mine")
+async def list_saved_strategies(
+    user_id: str = Query(..., min_length=1, max_length=128),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """
+    Return all saved strategies for the given user_id, newest first.
+    """
+    if not user_id:
+        raise HTTPException(400, "user_id required")
+    if not _sb_ok():
+        return []
+
+    rows = _sb_get(
+        "saved_strategies",
+        filters={"user_id": f"eq.{user_id}"},
+        order="created_at.desc",
+        limit=limit,
+    )
+    return rows
+
+
+@app.get("/api/strategies/{strategy_id}")
+async def get_saved_strategy(
+    strategy_id: str = Field(..., min_length=1, max_length=64),
+    user_id: str = Query(..., min_length=1, max_length=128),
+):
+    """
+    Return full details for a single saved strategy that belongs to the user.
+    """
+    if not user_id:
+        raise HTTPException(400, "user_id required")
+    if not _sb_ok():
+        raise HTTPException(503, "Supabase is unreachable. Cannot load strategy.")
+
+    rows = _sb_get(
+        "saved_strategies",
+        filters={"id": f"eq.{strategy_id}", "user_id": f"eq.{user_id}"},
+        limit=1,
+    )
+    if not rows:
+        raise HTTPException(404, "Saved strategy not found.")
+    return rows[0]
 
 
 # ---------------------------------------------------------------------------

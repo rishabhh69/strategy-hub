@@ -11,6 +11,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { EquityCurveChart } from "@/components/charts/EquityCurveChart";
 import { MetricsGrid } from "@/components/studio/MetricsGrid";
 import { CodeViewer } from "@/components/studio/CodeViewer";
@@ -34,6 +37,8 @@ const tickers = [
   { value: "SBIN", label: "SBIN.NS" },
 ];
 
+const MAX_EQUITY_POINTS = 800;
+
 interface BacktestResult {
   metrics: {
     cagr: number;
@@ -52,6 +57,23 @@ interface BacktestResult {
   generated_code: string;
 }
 
+function downsampleEquityCurve(
+  curve: BacktestResult["chart_data"] | undefined,
+  maxPoints: number = MAX_EQUITY_POINTS,
+) {
+  if (!curve || curve.length <= maxPoints) return curve || [];
+  const step = Math.ceil(curve.length / maxPoints);
+  const result: BacktestResult["chart_data"] = [];
+  for (let i = 0; i < curve.length; i += step) {
+    result.push(curve[i]);
+  }
+  const last = curve[curve.length - 1];
+  if (!result.length || result[result.length - 1].time !== last.time) {
+    result.push(last);
+  }
+  return result;
+}
+
 export default function StrategyStudio() {
   const navigate = useNavigate();
   const [selectedTicker, setSelectedTicker] = useState("NIFTY");
@@ -60,6 +82,10 @@ export default function StrategyStudio() {
   const [hasResults, setHasResults] = useState(false);
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [saveDescription, setSaveDescription] = useState("");
+  const [saving, setSaving] = useState(false);
   
   const handleRunBacktest = async () => {
     if (!strategyInput.trim()) return;
@@ -176,6 +202,71 @@ export default function StrategyStudio() {
     toast.success('Opening Live Terminal — choose symbol & quantity, then click "Deploy Paper Bot".');
   };
 
+  const handleSaveStrategy = async () => {
+    if (!backtestResult || !hasResults) {
+      toast.error("Run a backtest before saving a strategy.");
+      return;
+    }
+    if (!saveName.trim()) {
+      toast.error("Strategy name is required.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        toast.error("You must be signed in to save strategies.");
+        return;
+      }
+
+      const equityCurve = downsampleEquityCurve(backtestResult.chart_data);
+      const m = backtestResult.metrics;
+
+      const payload = {
+        user_id: user.id,
+        name: saveName.trim(),
+        description: saveDescription.trim() || undefined,
+        code: backtestResult.generated_code,
+        ticker: selectedTicker,
+        cagr: m.cagr,
+        total_return: m.total_return,
+        max_drawdown: m.drawdown,
+        volatility: m.volatility,
+        sharpe_ratio: m.sharpe,
+        sortino_ratio: m.sortino,
+        win_rate: m.win_rate,
+        total_trades: m.num_trades,
+        equity_curve: equityCurve,
+      };
+
+      const res = await fetch(`${API_BASE}/api/strategies/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const msg =
+          typeof data.detail === "string"
+            ? data.detail
+            : `Failed to save strategy (HTTP ${res.status})`;
+        throw new Error(msg);
+      }
+
+      toast.success("Strategy saved to your library.");
+      setSaveDialogOpen(false);
+      setSaveName("");
+      setSaveDescription("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save strategy.";
+      toast.error(msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <MainLayout>
       <div className="flex flex-col h-full">
@@ -209,14 +300,69 @@ export default function StrategyStudio() {
               {isRunning ? "Running..." : "Run Backtest"}
             </Button>
             {hasResults && backtestResult?.generated_code && (
-              <Button
-                variant="outline"
-                onClick={handleDeployToLiveTerminal}
-                className="border-primary/50 text-primary hover:bg-primary/10"
-              >
-                <Rocket className="w-4 h-4 mr-2" />
-                Deploy to Live Terminal
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  onClick={handleDeployToLiveTerminal}
+                  className="border-primary/50 text-primary hover:bg-primary/10"
+                >
+                  <Rocket className="w-4 h-4 mr-2" />
+                  Deploy to Live Terminal
+                </Button>
+                <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="border-border text-foreground hover:bg-muted/40"
+                    onClick={() => setSaveDialogOpen(true)}
+                  >
+                    Save Strategy
+                  </Button>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Save Strategy</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="strategy-name">Strategy Name</Label>
+                        <Input
+                          id="strategy-name"
+                          placeholder="My RSI + SMA Breakout"
+                          value={saveName}
+                          onChange={(e) => setSaveName(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="strategy-description">Description (optional)</Label>
+                        <Textarea
+                          id="strategy-description"
+                          placeholder="Notes about entry/exit logic, risk settings, etc."
+                          value={saveDescription}
+                          onChange={(e) => setSaveDescription(e.target.value)}
+                          className="min-h-[80px]"
+                        />
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setSaveDialogOpen(false)}
+                        disabled={saving}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={handleSaveStrategy}
+                        disabled={saving || !saveName.trim()}
+                      >
+                        {saving ? "Saving..." : "Save Strategy"}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </>
             )}
           </div>
         </div>

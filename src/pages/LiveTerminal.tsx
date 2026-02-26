@@ -273,9 +273,20 @@ export default function LiveTerminal() {
 
   // ── 2b. Strategy passed from Strategy Studio (no Supabase save) ───────────────
   useEffect(() => {
-    const state = location.state as { fromStudio?: boolean; title?: string; logicText?: string } | null;
-    if (state?.fromStudio && state?.logicText) {
+    const state = location.state as {
+      fromStudio?: boolean;
+      fromSavedStrategy?: boolean;
+      title?: string;
+      logicText?: string;
+      ticker?: string;
+    } | null;
+    if ((state?.fromStudio || state?.fromSavedStrategy) && state?.logicText) {
       setInlineStrategy({ title: state.title || "Backtest strategy", logicText: state.logicText });
+      if (state.ticker) {
+        setDeployTicker(state.ticker);
+        setChartTicker(state.ticker);
+        setTradeTicker(state.ticker);
+      }
     }
   }, [location.state]);
 

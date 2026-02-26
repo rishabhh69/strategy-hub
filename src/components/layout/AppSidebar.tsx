@@ -4,7 +4,8 @@ import {
   Users, 
   Settings, 
   ChevronLeft,
-  Monitor
+  Monitor,
+  Bookmark
 } from "lucide-react";
 import { NavLink, Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,12 @@ const navItems = [
     icon: Monitor, 
     path: "/terminal",
     description: "Execute & monitor"
+  },
+  { 
+    title: "Saved Strategies", 
+    icon: Bookmark, 
+    path: "/saved-strategies",
+    description: "My library"
   },
   { 
     title: "Settings", 
