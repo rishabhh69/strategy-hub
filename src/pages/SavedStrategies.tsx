@@ -80,44 +80,42 @@ export default function SavedStrategies() {
 
   return (
     <MainLayout>
-      <div className="p-4 md:p-6 max-w-6xl mx-auto h-full overflow-auto">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-foreground">Saved Strategies</h1>
-            <p className="text-sm text-muted-foreground">
-              Your private library of backtested strategies.
-            </p>
-          </div>
+      <div className="p-4 md:p-6 max-w-7xl w-full h-full overflow-auto">
+        <div className="mb-6">
+          <h1 className="text-xl font-semibold text-foreground">Saved Strategies</h1>
+          <p className="text-sm text-muted-foreground">
+            Your private library of backtested strategies.
+          </p>
         </div>
 
         {loading && (
-          <div className="flex items-center justify-center py-16 text-muted-foreground">
+          <div className="py-16 text-muted-foreground">
             Loading your saved strategies…
           </div>
         )}
 
         {!loading && error && strategies.length === 0 && (
-          <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
+          <div className="py-16 text-muted-foreground text-sm">
             {error}
           </div>
         )}
 
         {!loading && !error && strategies.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 text-center gap-4">
-            <div className="flex items-center justify-center w-12 h-12 rounded-full bg-muted/40 border border-border/60 mb-1">
+          <div className="flex flex-col gap-4 py-16">
+            <div className="w-12 h-12 rounded-full bg-muted/40 border border-border/60 flex items-center justify-center">
               <span className="text-lg text-muted-foreground">★</span>
             </div>
             <div className="space-y-1">
               <p className="text-sm font-medium text-foreground">
                 Your strategy library is empty
               </p>
-              <p className="text-xs text-muted-foreground/80 max-w-sm mx-auto">
+              <p className="text-xs text-muted-foreground/80 max-w-sm">
                 Run a backtest in Strategy Studio and save your favorite strategies to build a private playbook.
               </p>
             </div>
             <Button
               size="sm"
-              className="mt-2"
+              className="w-fit"
               onClick={() => navigate("/strategy-studio")}
             >
               Go to Strategy Studio
