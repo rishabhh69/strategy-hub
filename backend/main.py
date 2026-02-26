@@ -1472,7 +1472,7 @@ async def list_saved_strategies(
 
 @app.get("/api/strategies/{strategy_id}")
 async def get_saved_strategy(
-    strategy_id: str = Field(..., min_length=1, max_length=64),
+    strategy_id: str,
     user_id: str = Query(..., min_length=1, max_length=128),
 ):
     """
