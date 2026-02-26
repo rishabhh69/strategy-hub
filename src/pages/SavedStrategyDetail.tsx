@@ -38,25 +38,30 @@ export default function SavedStrategyDetail() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!id) {
+      setError("Missing strategy id.");
+      setLoading(false);
+      return undefined;
+    }
+    setLoading(true);
+    setError(null);
+    setStrategy(null);
     let cancelled = false;
+
     const load = async () => {
-      if (!id) {
-        setError("Missing strategy id.");
-        setLoading(false);
-        return;
-      }
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user?.id) {
-          setError("You must be signed in to view this strategy.");
-          setLoading(false);
+          if (!cancelled) {
+            setError("You must be signed in to view this strategy.");
+            setLoading(false);
+          }
           return;
         }
         const res = await fetch(
-          `${API_BASE}/api/strategies/${encodeURIComponent(id)}?user_id=${encodeURIComponent(
-            user.id,
-          )}`,
+          `${API_BASE}/api/strategies/${encodeURIComponent(id)}?user_id=${encodeURIComponent(user.id)}`,
         );
+        if (cancelled) return;
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           const msg =
@@ -66,9 +71,7 @@ export default function SavedStrategyDetail() {
           throw new Error(msg);
         }
         const row: SavedStrategy = await res.json();
-        if (!cancelled) {
-          setStrategy(row);
-        }
+        if (!cancelled) setStrategy(row);
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Failed to load strategy.";
         if (!cancelled) {
@@ -186,7 +189,7 @@ export default function SavedStrategyDetail() {
               </CardContent>
             </Card>
 
-            {/* Equity curve */}
+            {/* Equity curve — chart sanitizes and caps data internally */}
             <Card className="bg-card/80 border-border">
               <CardContent className="p-4">
                 <EquityCurveChart chartData={strategy.equity_curve ?? undefined} />

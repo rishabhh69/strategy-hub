@@ -1,25 +1,60 @@
+import { useMemo } from "react";
 import { Area, AreaChart, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 
+const MAX_CHART_POINTS = 800;
+
 interface ChartDataPoint {
-  time: string;
-  value: number;
+  time?: string;
+  value?: number;
 }
 
 interface EquityCurveChartProps {
-  chartData?: ChartDataPoint[];
+  chartData?: ChartDataPoint[] | null;
+}
+
+function getPointTimeValue(point: unknown): { time: string; value: number } | null {
+  if (point == null) return null;
+  if (Array.isArray(point) && point.length >= 2) {
+    const val = Number(point[1]);
+    if (Number.isNaN(val)) return null;
+    return { time: String(point[0]), value: val };
+  }
+  if (typeof point !== "object") return null;
+  const p = point as Record<string, unknown>;
+  const val = typeof p?.value === "number" && !Number.isNaN(p.value) ? p.value : Number(p?.value);
+  if (Number.isNaN(val)) return null;
+  const time = p?.time != null ? String(p.time) : "";
+  return { time, value: val };
+}
+
+function sanitizeChartData(raw: unknown): { date: string; value: number; benchmark: number }[] {
+  if (!raw || !Array.isArray(raw)) return [];
+  const arr = raw as unknown[];
+  if (arr.length === 0) return [];
+  const step = arr.length <= MAX_CHART_POINTS ? 1 : Math.max(1, Math.ceil(arr.length / MAX_CHART_POINTS));
+  const result: { date: string; value: number; benchmark: number }[] = [];
+  for (let i = 0; i < arr.length; i += step) {
+    const tv = getPointTimeValue(arr[i]);
+    if (!tv) continue;
+    const dateStr = tv.time ? new Date(tv.time).toLocaleDateString("en-IN", { month: "short", day: "numeric" }) : "";
+    if (dateStr === "Invalid Date") continue;
+    result.push({ date: dateStr || String(i), value: tv.value, benchmark: 100000 });
+  }
+  const lastTv = getPointTimeValue(arr[arr.length - 1]);
+  if (lastTv && (result.length === 0 || result[result.length - 1].value !== lastTv.value)) {
+    const dateStr = lastTv.time ? new Date(lastTv.time).toLocaleDateString("en-IN", { month: "short", day: "numeric" }) : "End";
+    result.push({ date: dateStr === "Invalid Date" ? "End" : dateStr, value: lastTv.value, benchmark: 100000 });
+  }
+  return result;
 }
 
 export function EquityCurveChart({ chartData }: EquityCurveChartProps) {
-  // Transform chart data to match component format
-  const data = chartData
-    ? chartData.map((point) => ({
-        date: new Date(point.time).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }),
-        value: point.value,
-        benchmark: 100000, // Simple benchmark, can be enhanced later
-      }))
-    : [];
-  
-  const isPositive = data.length > 0 && data[data.length - 1].value > data[0].value;
+  const data = useMemo(() => sanitizeChartData(chartData ?? null), [chartData]);
+  const firstVal = data.length > 0 ? data[0].value : 0;
+  const lastVal = data.length > 0 ? data[data.length - 1].value : 0;
+  const isPositive = data.length > 0 && firstVal > 0 && lastVal > firstVal;
+  const pctChange = data.length > 0 && firstVal > 0 ? ((lastVal / firstVal - 1) * 100) : 0;
+
   return (
     <div className="h-full w-full">
       <div className="flex items-center justify-between mb-4">
@@ -27,11 +62,11 @@ export function EquityCurveChart({ chartData }: EquityCurveChartProps) {
           <h3 className="text-sm font-medium text-muted-foreground">Equity Curve</h3>
           <div className="flex items-center gap-3 mt-1">
             <span className="font-data text-2xl text-foreground">
-              {data.length > 0 ? `₹${data[data.length - 1].value.toLocaleString('en-IN')}` : '₹0'}
+              {data.length > 0 ? `₹${Number(lastVal).toLocaleString("en-IN")}` : "₹0"}
             </span>
             {data.length > 0 && (
-              <span className={`font-data text-sm ${isPositive ? 'text-profit' : 'text-loss'}`}>
-                {isPositive ? '+' : ''}{((data[data.length - 1].value / data[0].value - 1) * 100).toFixed(2)}%
+              <span className={`font-data text-sm ${isPositive ? "text-profit" : "text-loss"}`}>
+                {pctChange >= 0 ? "+" : ""}{Number(pctChange).toFixed(2)}%
               </span>
             )}
           </div>
