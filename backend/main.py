@@ -20,6 +20,7 @@ import builtins
 import logging
 import math
 import os
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -1425,6 +1426,7 @@ async def save_strategy(req: SaveStrategyRequest):
         raise HTTPException(503, "Supabase is unreachable. Cannot save strategy.")
 
     payload: Dict[str, Any] = {
+        "id":           str(uuid.uuid4()),
         "user_id":      req.user_id,
         "name":         req.name.strip(),
         "description":  (req.description or "").strip() or None,
