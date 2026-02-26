@@ -40,6 +40,7 @@ const PAPER_VERSION   = "v3";              // bump when PersistedPaper schema ch
 const TICKERS = [
   { value: "NIFTY",      label: "NIFTY 50",    group: "Index"  },
   { value: "BANKNIFTY",  label: "BANK NIFTY",  group: "Index"  },
+  { value: "SENSEX",     label: "SENSEX",      group: "Index"  },
   { value: "RELIANCE",   label: "RELIANCE",     group: "Stock"  },
   { value: "HDFCBANK",   label: "HDFC BANK",    group: "Stock"  },
   { value: "TCS",        label: "TCS",          group: "Stock"  },
