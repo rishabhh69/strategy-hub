@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Eye, EyeOff, Mail, Lock, User, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,6 +48,7 @@ function ResendConfirmationButton({ email, callbackUrl }: { email: string; callb
 }
 
 export default function Auth() {
+  const [searchParams] = useSearchParams();
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -57,6 +58,14 @@ export default function Auth() {
   const [signUpSuccess, setSignUpSuccess] = useState(false);
   const [signInUnconfirmed, setSignInUnconfirmed] = useState(false);
   const navigate = useNavigate();
+
+  // Open Sign Up form when arriving with ?mode=signup (e.g. from "Get Started" button)
+  useEffect(() => {
+    const mode = searchParams.get("mode");
+    if (mode === "signup") {
+      setIsLogin(false);
+    }
+  }, [searchParams]);
 
   // Use VITE_APP_URL in production so the confirmation email link points to your app (set in Vercel env).
   // Add this exact URL to Supabase Dashboard → Authentication → URL Configuration → Redirect URLs.

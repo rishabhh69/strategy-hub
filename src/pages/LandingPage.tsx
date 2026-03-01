@@ -151,7 +151,7 @@ export default function LandingPage() {
               <Link to="/auth">
                 <Button variant="ghost" size="sm">Log In</Button>
               </Link>
-              <Link to="/auth">
+              <Link to="/auth?mode=signup">
                 <Button size="sm" className="btn-glow">Get Started</Button>
               </Link>
             </div>
