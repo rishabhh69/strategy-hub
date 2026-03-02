@@ -1,7 +1,7 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Zap, Database, Shield, ArrowRight, Code, Play } from "lucide-react";
+import { Sparkles, Zap, Database, Shield, ArrowRight, Code, Play, Brain } from "lucide-react";
 import { TickerTape } from "@/components/layout/TickerTape";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -241,12 +241,12 @@ export default function LandingPage() {
             <FeatureCard 
               icon={Zap}
               title="Instant Backtesting"
-              description="Run simulations on 5+ years of tick-by-tick NSE data in under 30 seconds."
+              description="Run simulations on 5+ years of historical NSE data in under 30 seconds to validate your edge before risking real capital."
             />
             <FeatureCard 
-              icon={Database}
-              title="Institutional Grade Data"
-              description="Access the same data feeds used by hedge funds and prop trading desks."
+              icon={Brain}
+              title="Greed AI Risk Guard"
+              description="Trade like a machine, not an emotional human. Our AI monitors your live deployments, enforcing max-drawdowns and preventing revenge trading automatically."
             />
             <FeatureCard 
               icon={Shield}
