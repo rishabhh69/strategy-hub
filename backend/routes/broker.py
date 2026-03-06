@@ -44,19 +44,20 @@ async def angelone_login(payload: AngelOneLoginPayload) -> Dict[str, Any]:
   if not totp_secret:
     raise HTTPException(500, "ANGEL_TOTP_SECRET not configured on server.")
   try:
-    totp_pin = pyotp.TOTP(totp_secret).now()
+    # Ensure we pass a 6-digit TOTP string to SmartConnect
+    totp_pin = str(pyotp.TOTP(totp_secret).now()).strip()
   except Exception as e:  # noqa: BLE001
     raise HTTPException(500, f"Failed to generate TOTP: {e}") from e
 
   try:
     smart = SmartConnect(api_key=api_key)
-    session = smart.generateSession(
-      client_id=client_id,
-      password=password,
-      totp=totp_pin,
-    )
-    data = session.get("data") or session
-    jwt_token = (data or {}).get("jwtToken")
+    # SmartConnect.generateSession expects positional args: username, password, totp
+    session = smart.generateSession(client_id, password, totp_pin)
+    # Angel One typically nests tokens under data['data']
+    data = (session or {}).get("data") or {}
+    token_data = data.get("data") or data
+    jwt_token = (token_data or {}).get("jwtToken")
+    refresh_token = (token_data or {}).get("refreshToken")
     feed_token = smart.getfeedToken()
     if not jwt_token or not feed_token:
       raise HTTPException(500, "Angel One did not return expected tokens.")
@@ -76,6 +77,7 @@ async def angelone_login(payload: AngelOneLoginPayload) -> Dict[str, Any]:
           "broker_name": "angelone",
           "encrypted_api_key": feed_token,
           "access_token": jwt_token,
+          "refresh_token": refresh_token,
           "is_active": True,
         },
         on_conflict="user_id,broker_name",
