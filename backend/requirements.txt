@@ -7,6 +7,7 @@ smartapi-python
 pyotp
 requests
 logzero
+websocket-client
 
 # Tradeky Backend — production dependencies
 # Python 3.10+ recommended
