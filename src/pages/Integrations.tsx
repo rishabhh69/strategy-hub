@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,39 +13,106 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { PlugZap } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
+import { API_BASE } from "@/lib/api";
 
 interface BrokerCredentialRow {
   id: string;
   broker_name: string;
-  status: "active" | "inactive";
-  created_at: string;
+  is_active: boolean;
+  created_at: string | null;
 }
 
-const mockBrokers: BrokerCredentialRow[] = [
-  {
-    id: "1",
-    broker_name: "Zerodha",
-    status: "active",
-    created_at: "2026-02-20",
-  },
-  {
-    id: "2",
-    broker_name: "Upstox",
-    status: "inactive",
-    created_at: "2026-01-15",
-  },
-];
-
 export default function Integrations() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [connecting, setConnecting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [brokers, setBrokers] = useState<BrokerCredentialRow[]>([]);
 
-  const handleConnectBroker = () => {
-    setConnecting(true);
-    // In real app this would kick off OAuth / API-key flow
-    // For now, just log for debugging.
-    // eslint-disable-next-line no-console
-    console.log("Initiate Zerodha OAuth");
-    setTimeout(() => setConnecting(false), 800);
+  const fetchBrokers = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        setBrokers([]);
+        setLoading(false);
+        return;
+      }
+      const { data, error } = await supabase
+        .from("broker_credentials")
+        .select("id, broker_name, is_active, created_at")
+        .eq("user_id", user.id);
+      if (error) throw error;
+      setBrokers((data ?? []) as BrokerCredentialRow[]);
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to load broker integrations.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchBrokers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Handle Zerodha redirect (?request_token=...)
+  useEffect(() => {
+    const handleCallback = async () => {
+      const requestToken = searchParams.get("request_token");
+      if (!requestToken) return;
+      toast.info("Authenticating with Zerodha...");
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user?.id) {
+          toast.error("You must be signed in to link your broker.");
+          return;
+        }
+        const res = await fetch(`${API_BASE}/api/broker/zerodha/callback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ request_token: requestToken, user_id: user.id }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          const msg =
+            typeof data.detail === "string"
+              ? data.detail
+              : `Zerodha callback failed (HTTP ${res.status})`;
+          throw new Error(msg);
+        }
+        toast.success("Zerodha connected successfully.");
+        // Clear request_token from URL
+        searchParams.delete("request_token");
+        setSearchParams(searchParams, { replace: true });
+        // Refresh brokers table
+        setLoading(true);
+        await fetchBrokers();
+      } catch (e) {
+        console.error(e);
+        toast.error(e instanceof Error ? e.message : "Zerodha authentication failed.");
+      }
+    };
+    handleCallback();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const handleConnectBroker = async () => {
+    try {
+      setConnecting(true);
+      const res = await fetch(`${API_BASE}/api/broker/zerodha/login-url`);
+      if (!res.ok) {
+        throw new Error(`Failed to get Zerodha login URL (HTTP ${res.status})`);
+      }
+      const data = await res.json();
+      if (!data?.url) throw new Error("Backend did not return a login URL.");
+      window.location.href = data.url as string;
+    } catch (e) {
+      console.error(e);
+      toast.error(e instanceof Error ? e.message : "Failed to start Zerodha OAuth.");
+      setConnecting(false);
+    }
   };
 
   return (
@@ -66,7 +134,7 @@ export default function Integrations() {
             onClick={handleConnectBroker}
             disabled={connecting}
           >
-            {connecting ? "Connecting…" : "Connect Broker"}
+            {connecting ? "Connecting…" : "Connect Angel One"}
           </Button>
         </div>
 
@@ -77,7 +145,9 @@ export default function Integrations() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {mockBrokers.length === 0 ? (
+            {loading ? (
+              <p className="text-xs text-muted-foreground">Loading broker connections…</p>
+            ) : brokers.length === 0 ? (
               <p className="text-xs text-muted-foreground">
                 No broker accounts connected yet. Click &quot;Connect Broker&quot; to get started.
               </p>
@@ -91,21 +161,21 @@ export default function Integrations() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {mockBrokers.map((b) => (
+                  {brokers.map((b) => (
                     <TableRow key={b.id} className="border-border">
                       <TableCell className="text-sm text-foreground">
                         {b.broker_name}
                       </TableCell>
                       <TableCell>
                         <Badge
-                          variant={b.status === "active" ? "default" : "outline"}
-                          className={b.status === "active" ? "bg-profit/20 text-profit border-profit/40" : ""}
+                          variant={b.is_active ? "default" : "outline"}
+                          className={b.is_active ? "bg-profit/20 text-profit border-profit/40" : ""}
                         >
-                          {b.status === "active" ? "Active" : "Inactive"}
+                          {b.is_active ? "Active" : "Inactive"}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        {b.created_at}
+                        {b.created_at ? new Date(b.created_at).toLocaleDateString("en-IN") : "—"}
                       </TableCell>
                     </TableRow>
                   ))}

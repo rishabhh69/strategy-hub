@@ -46,6 +46,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from routes.broker import router as broker_router
 
 logging.getLogger("yfinance").setLevel(logging.WARNING)
 logging.getLogger("peewee").setLevel(logging.CRITICAL)
@@ -147,14 +148,19 @@ async def validation_exception_handler(_request: Request, exc: RequestValidation
     return JSONResponse(status_code=422, content={"detail": detail})
 
 
+frontend_origin = os.getenv("FRONTEND_URL")
+cors_origins = [frontend_origin] if frontend_origin else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production to known frontend origin(s)
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.middleware("http")(_rate_limit_middleware)
+
+app.include_router(broker_router)
 
 # ---------------------------------------------------------------------------
 # OpenAI
