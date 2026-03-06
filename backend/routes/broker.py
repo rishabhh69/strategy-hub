@@ -66,7 +66,7 @@ async def angelone_login(payload: AngelOneLoginPayload) -> Dict[str, Any]:
   except Exception as e:  # noqa: BLE001
     raise HTTPException(400, f"Angel One login failed: {e}") from e
 
-  # Persist broker_credentials row via Supabase: map jwtToken→access_token, feed_token→encrypted_api_key
+  # Persist broker_credentials row via Supabase: jwtToken→access_token, refreshToken→refresh_token, feedToken→feed_token
   try:
     supabase = get_supabase()
     resp = (
@@ -75,8 +75,9 @@ async def angelone_login(payload: AngelOneLoginPayload) -> Dict[str, Any]:
         {
           "user_id": payload.user_id,
           "broker_name": "angelone",
-          "encrypted_api_key": feed_token,
+          "client_id": client_id,
           "access_token": jwt_token,
+          "feed_token": feed_token,
           "refresh_token": refresh_token,
           "is_active": True,
         },
@@ -85,7 +86,11 @@ async def angelone_login(payload: AngelOneLoginPayload) -> Dict[str, Any]:
       .execute()
     )
   except Exception as e:  # noqa: BLE001
-    raise HTTPException(503, f"Failed to persist Angel One credentials: {e}") from e
+    raise HTTPException(
+      503,
+      f"Database error while saving Angel One credentials (table broker_credentials). "
+      f"Please contact support with this message: {e}",
+    ) from e
 
   return {"ok": True, "updated": getattr(resp, "data", None) or []}
 
