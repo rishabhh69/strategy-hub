@@ -46,7 +46,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from routes.broker import router as broker_router
+import routes.broker as broker
 
 logging.getLogger("yfinance").setLevel(logging.WARNING)
 logging.getLogger("peewee").setLevel(logging.CRITICAL)
@@ -166,7 +166,7 @@ app.add_middleware(
 )
 app.middleware("http")(_rate_limit_middleware)
 
-app.include_router(broker_router)
+app.include_router(broker.router)
 
 # ---------------------------------------------------------------------------
 # OpenAI
