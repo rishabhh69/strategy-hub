@@ -125,7 +125,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     toast.success("Signed out successfully");
-    navigate("/auth");
+    navigate("/auth", { replace: true });
   };
 
   return (

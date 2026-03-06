@@ -60,7 +60,7 @@ export default function Settings() {
   useEffect(() => {
     const load = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { navigate("/auth"); return; }
+      if (!user) { navigate("/auth", { replace: true }); return; }
 
       setUserId(user.id);
       setEmail(user.email ?? "");

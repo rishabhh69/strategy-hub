@@ -32,7 +32,7 @@ export default function Profile() {
       const { data: { user } } = await supabase.auth.getUser();
       
       if (!user) {
-        navigate("/auth");
+        navigate("/auth", { replace: true });
         return;
       }
 
