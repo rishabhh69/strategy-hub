@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +12,9 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { PlugZap } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { API_BASE } from "@/lib/api";
@@ -25,10 +27,13 @@ interface BrokerCredentialRow {
 }
 
 export default function Integrations() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [connecting, setConnecting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [brokers, setBrokers] = useState<BrokerCredentialRow[]>([]);
+  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
+  const [clientId, setClientId] = useState("");
+  const [password, setPassword] = useState("");
+  const [totpPin, setTotpPin] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const fetchBrokers = async () => {
     try {
@@ -57,61 +62,48 @@ export default function Integrations() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Handle Zerodha redirect (?request_token=...)
-  useEffect(() => {
-    const handleCallback = async () => {
-      const requestToken = searchParams.get("request_token");
-      if (!requestToken) return;
-      toast.info("Authenticating with Zerodha...");
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user?.id) {
-          toast.error("You must be signed in to link your broker.");
-          return;
-        }
-        const res = await fetch(`${API_BASE}/api/broker/zerodha/callback`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ request_token: requestToken, user_id: user.id }),
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          const msg =
-            typeof data.detail === "string"
-              ? data.detail
-              : `Zerodha callback failed (HTTP ${res.status})`;
-          throw new Error(msg);
-        }
-        toast.success("Zerodha connected successfully.");
-        // Clear request_token from URL
-        searchParams.delete("request_token");
-        setSearchParams(searchParams, { replace: true });
-        // Refresh brokers table
-        setLoading(true);
-        await fetchBrokers();
-      } catch (e) {
-        console.error(e);
-        toast.error(e instanceof Error ? e.message : "Zerodha authentication failed.");
-      }
-    };
-    handleCallback();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  const handleConnectBroker = () => {
+    setClientId("");
+    setPassword("");
+    setTotpPin("");
+    setConnectDialogOpen(true);
+  };
 
-  const handleConnectBroker = async () => {
+  const handleAngelLogin = async () => {
     try {
-      setConnecting(true);
-      const res = await fetch(`${API_BASE}/api/broker/zerodha/login-url`);
-      if (!res.ok) {
-        throw new Error(`Failed to get Zerodha login URL (HTTP ${res.status})`);
+      setSubmitting(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        toast.error("You must be signed in to link your broker.");
+        return;
       }
-      const data = await res.json();
-      if (!data?.url) throw new Error("Backend did not return a login URL.");
-      window.location.href = data.url as string;
+      const res = await fetch(`${API_BASE}/api/broker/angelone/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: clientId,
+          password,
+          totp_pin: totpPin,
+          user_id: user.id,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const msg =
+          typeof data.detail === "string"
+            ? data.detail
+            : `Angel One login failed (HTTP ${res.status})`;
+        throw new Error(msg);
+      }
+      toast.success("Angel One connected successfully.");
+      setConnectDialogOpen(false);
+      setLoading(true);
+      await fetchBrokers();
     } catch (e) {
       console.error(e);
-      toast.error(e instanceof Error ? e.message : "Failed to start Zerodha OAuth.");
-      setConnecting(false);
+      toast.error(e instanceof Error ? e.message : "Angel One login failed.");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -132,9 +124,8 @@ export default function Integrations() {
             size="sm"
             className="btn-glow bg-gradient-to-r from-primary to-accent"
             onClick={handleConnectBroker}
-            disabled={connecting}
           >
-            {connecting ? "Connecting…" : "Connect Angel One"}
+            Connect Angel One
           </Button>
         </div>
 
@@ -184,6 +175,70 @@ export default function Integrations() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog open={connectDialogOpen} onOpenChange={setConnectDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Connect Angel One</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <Label htmlFor="client-id" className="text-xs text-muted-foreground">
+                  Client ID
+                </Label>
+                <Input
+                  id="client-id"
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                  className="bg-card border-border text-sm"
+                  placeholder="Your Angel One client ID"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="password" className="text-xs text-muted-foreground">
+                  Password / PIN
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="bg-card border-border text-sm"
+                  placeholder="Account password or PIN"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="totp" className="text-xs text-muted-foreground">
+                  TOTP PIN
+                </Label>
+                <Input
+                  id="totp"
+                  value={totpPin}
+                  onChange={(e) => setTotpPin(e.target.value)}
+                  className="bg-card border-border text-sm"
+                  placeholder="6-digit TOTP from your authenticator app"
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setConnectDialogOpen(false)}
+                  disabled={submitting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleAngelLogin}
+                  disabled={submitting || !clientId || !password || !totpPin}
+                >
+                  {submitting ? "Connecting…" : "Connect"}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </MainLayout>
   );
