@@ -13,9 +13,10 @@ router = APIRouter(prefix="/api/broker", tags=["broker"])
 
 
 class AngelOneLoginPayload(BaseModel):
-  client_id: str = Field(..., min_length=1, max_length=128)
-  password: str = Field(..., min_length=1)
-  totp_pin: str = Field(..., min_length=4, max_length=8)
+  # For non-admin users we accept client_id/password from the request.
+  # For admin / fully server-side flows, these may be omitted and taken from env.
+  client_id: str | None = Field(default=None, min_length=1, max_length=128)
+  password: str | None = Field(default=None, min_length=1)
   user_id: str = Field(..., min_length=1, max_length=128)
 
 
@@ -32,18 +33,26 @@ async def angelone_login(payload: AngelOneLoginPayload) -> Dict[str, Any]:
   if not api_key:
     raise HTTPException(500, "ANGEL_API_KEY not configured on server.")
 
-  # If a shared TOTP secret is configured on the server, prefer generating OTP here.
+  # Resolve credentials: prefer request payload, fall back to backend .env defaults.
+  client_id = (payload.client_id or os.getenv("ANGEL_CLIENT_ID") or "").strip()
+  password = (payload.password or os.getenv("ANGEL_PASSWORD") or "").strip()
+  if not client_id or not password:
+    raise HTTPException(400, "Angel One client_id/password not provided and no backend defaults configured.")
+
+  # Always generate TOTP internally using backend secret to avoid asking user for 6-digit code.
   totp_secret = os.getenv("ANGEL_TOTP_SECRET")
+  if not totp_secret:
+    raise HTTPException(500, "ANGEL_TOTP_SECRET not configured on server.")
   try:
-    totp_pin = pyotp.TOTP(totp_secret).now() if totp_secret else payload.totp_pin
-  except Exception:
-    totp_pin = payload.totp_pin
+    totp_pin = pyotp.TOTP(totp_secret).now()
+  except Exception as e:  # noqa: BLE001
+    raise HTTPException(500, f"Failed to generate TOTP: {e}") from e
 
   try:
     smart = SmartConnect(api_key=api_key)
     session = smart.generateSession(
-      client_id=payload.client_id,
-      password=payload.password,
+      client_id=client_id,
+      password=password,
       totp=totp_pin,
     )
     data = session.get("data") or session

@@ -31,8 +31,7 @@ export default function Integrations() {
   const [brokers, setBrokers] = useState<BrokerCredentialRow[]>([]);
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
   const [clientId, setClientId] = useState("");
-  const [password, setPassword] = useState("");
-  const [totpPin, setTotpPin] = useState("");
+  const [pin, setPin] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const fetchBrokers = async () => {
@@ -64,8 +63,7 @@ export default function Integrations() {
 
   const handleConnectBroker = () => {
     setClientId("");
-    setPassword("");
-    setTotpPin("");
+    setPin("");
     setConnectDialogOpen(true);
   };
 
@@ -82,8 +80,7 @@ export default function Integrations() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           client_id: clientId,
-          password,
-          totp_pin: totpPin,
+          password: pin,
           user_id: user.id,
         }),
       });
@@ -195,28 +192,16 @@ export default function Integrations() {
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="password" className="text-xs text-muted-foreground">
-                  Password / PIN
+                <Label htmlFor="pin" className="text-xs text-muted-foreground">
+                  PIN
                 </Label>
                 <Input
-                  id="password"
+                  id="pin"
                   type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
                   className="bg-card border-border text-sm"
-                  placeholder="Account password or PIN"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="totp" className="text-xs text-muted-foreground">
-                  TOTP PIN
-                </Label>
-                <Input
-                  id="totp"
-                  value={totpPin}
-                  onChange={(e) => setTotpPin(e.target.value)}
-                  className="bg-card border-border text-sm"
-                  placeholder="6-digit TOTP from your authenticator app"
+                  placeholder="Account PIN"
                 />
               </div>
               <div className="flex justify-end gap-2">
@@ -231,7 +216,7 @@ export default function Integrations() {
                 <Button
                   size="sm"
                   onClick={handleAngelLogin}
-                  disabled={submitting || !clientId || !password || !totpPin}
+                  disabled={submitting || !clientId || !pin}
                 >
                   {submitting ? "Connecting…" : "Connect"}
                 </Button>
