@@ -17,7 +17,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { API_BASE } from "@/lib/api";
 
 interface BrokerCredentialRow {
   id: string;
@@ -75,7 +74,11 @@ export default function Integrations() {
         toast.error("You must be signed in to link your broker.");
         return;
       }
-      const res = await fetch(`${API_BASE}/api/broker/angelone/login`, {
+      const API_BASE_URL =
+        window.location.hostname === "localhost"
+          ? "http://localhost:8000"
+          : "https://tradeky.onrender.com";
+      const res = await fetch(`${API_BASE_URL}/api/broker/angelone/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

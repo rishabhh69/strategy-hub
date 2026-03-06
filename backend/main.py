@@ -149,11 +149,17 @@ async def validation_exception_handler(_request: Request, exc: RequestValidation
 
 
 frontend_origin = os.getenv("FRONTEND_URL")
-cors_origins = [frontend_origin] if frontend_origin else ["*"]
+default_origins = [
+    "https://tradeky.in",
+    "https://www.tradeky.in",
+    "https://tradeky.vercel.app",
+    "https://tradeky.onrender.com",
+]
+cors_origins = [o for o in [frontend_origin, *default_origins] if o]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=cors_origins or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
