@@ -23,9 +23,10 @@ interface DeploymentModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirmPaper: () => void;
-  onConfirmLive?: (opts: { brokerId: string; capital: number }) => void;
+  onConfirmLive?: (opts: { brokerId: string; capital: number }) => void | Promise<void>;
   hasActiveBroker: boolean;
   brokers: BrokerOption[];
+  liveDeploying?: boolean;
 }
 
 export function DeploymentModal({
@@ -35,6 +36,7 @@ export function DeploymentModal({
   onConfirmLive,
   hasActiveBroker,
   brokers,
+  liveDeploying = false,
 }: DeploymentModalProps) {
   const navigate = useNavigate();
   const [mode, setMode] = useState<Mode>("paper");
@@ -46,15 +48,19 @@ export function DeploymentModal({
     onOpenChange(false);
   };
 
-  const handleLive = () => {
+  const handleLive = async () => {
     if (!hasActiveBroker) {
       return;
     }
     const brokerId = selectedBrokerId || (brokers[0]?.id ?? "");
     const capitalNum = Number(capital || 0);
     if (!brokerId || !onConfirmLive) return;
-    onConfirmLive({ brokerId, capital: Number.isNaN(capitalNum) ? 0 : capitalNum });
-    onOpenChange(false);
+    try {
+      await Promise.resolve(onConfirmLive({ brokerId, capital: Number.isNaN(capitalNum) ? 0 : capitalNum }));
+      onOpenChange(false);
+    } catch {
+      // Error toast handled by parent
+    }
   };
 
   const paperSelected = mode === "paper";
@@ -173,8 +179,8 @@ export function DeploymentModal({
                     />
                   </div>
                   <div className="flex justify-end">
-                    <Button size="sm" onClick={handleLive}>
-                      Confirm Live Deployment
+                    <Button size="sm" onClick={handleLive} disabled={liveDeploying}>
+                      {liveDeploying ? "Placing order…" : "Confirm Live Deployment"}
                     </Button>
                   </div>
                 </>

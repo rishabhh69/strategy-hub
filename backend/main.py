@@ -21,8 +21,11 @@ import logging
 import math
 import os
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
 # Load .env from the backend directory (where main.py lives)
@@ -47,6 +50,7 @@ from fastapi.responses import JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import routes.broker as broker
+from routes.broker import refresh_all_broker_sessions
 
 logging.getLogger("yfinance").setLevel(logging.WARNING)
 logging.getLogger("peewee").setLevel(logging.CRITICAL)
@@ -123,10 +127,34 @@ async def _rate_limit_middleware(request: Request, call_next):
 
 
 # ---------------------------------------------------------------------------
+# Daily Wake-up: refresh Angel One sessions at 08:45 AM IST
+# ---------------------------------------------------------------------------
+_broker_scheduler: Optional[AsyncIOScheduler] = None
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    global _broker_scheduler
+    _broker_scheduler = AsyncIOScheduler()
+    _broker_scheduler.add_job(
+        refresh_all_broker_sessions,
+        trigger="cron",
+        hour=8,
+        minute=45,
+        timezone=ZoneInfo("Asia/Kolkata"),
+        id="daily_broker_refresh",
+    )
+    _broker_scheduler.start()
+    yield
+    if _broker_scheduler:
+        _broker_scheduler.shutdown(wait=False)
+
+
+# ---------------------------------------------------------------------------
 # App + CORS (A05 Misconfiguration) + Rate limit
 # Production: set allow_origins to your frontend only (e.g. ["https://tradeky.in"]).
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Tradeky Backend")
+app = FastAPI(title="Tradeky Backend", lifespan=_lifespan)
 
 
 @app.exception_handler(RequestValidationError)

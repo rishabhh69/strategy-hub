@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Play, ChevronDown, Code, BarChart3, Calculator, Rocket } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -88,7 +88,44 @@ export default function StrategyStudio() {
   const [saveDescription, setSaveDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [deploymentOpen, setDeploymentOpen] = useState(false);
-  
+  const [activeBrokers, setActiveBrokers] = useState<{ id: string; label: string }[]>([]);
+  const [brokersLoading, setBrokersLoading] = useState(true);
+  const [liveDeploying, setLiveDeploying] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user?.id) {
+          if (!cancelled) setActiveBrokers([]);
+          return;
+        }
+        const { data, error } = await supabase
+          .from("broker_credentials")
+          .select("broker_name, client_id")
+          .eq("user_id", user.id)
+          .eq("is_active", true);
+        if (error) throw error;
+        const list = (data ?? []).map((row: { broker_name: string; client_id: string | null }) => {
+          const name = row.broker_name || "";
+          const label =
+            name.toLowerCase() === "angelone"
+              ? `Angel One - ${row.client_id || name}`
+              : `${name}${row.client_id ? ` - ${row.client_id}` : ""}`;
+          return { id: name, label: label || name };
+        });
+        if (!cancelled) setActiveBrokers(list);
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) setActiveBrokers([]);
+      } finally {
+        if (!cancelled) setBrokersLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [deploymentOpen]);
+
   const handleRunBacktest = async () => {
     if (!strategyInput.trim()) return;
     
@@ -640,17 +677,57 @@ Examples:
           open={deploymentOpen}
           onOpenChange={setDeploymentOpen}
           onConfirmPaper={handleDeployToLiveTerminal}
-          // Live execution is mocked for now
-          hasActiveBroker={true}
-          brokers={[
-            { id: "broker-1", label: "Zerodha - Prop Desk" },
-            { id: "broker-2", label: "Upstox - Client Pool" },
-          ]}
-          onConfirmLive={({ brokerId, capital }) => {
-            // In a future iteration, call backend to create a strategy_deployments row
-            // eslint-disable-next-line no-console
-            console.log("Live deploy", { brokerId, capital });
-            toast.success("Live deployment instruction recorded (mock).");
+          hasActiveBroker={activeBrokers.length > 0}
+          brokers={activeBrokers}
+          liveDeploying={liveDeploying}
+          onConfirmLive={async ({ brokerId, capital: capitalNum }) => {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user?.id) {
+              toast.error("You must be signed in to place a live order.");
+              return;
+            }
+            if (capitalNum <= 0) {
+              toast.error("Enter a valid capital allocation (₹).");
+              return;
+            }
+            setLiveDeploying(true);
+            try {
+              const quoteRes = await fetch(`${API_BASE}/quote/${encodeURIComponent(selectedTicker)}`);
+              const quoteData = await quoteRes.json().catch(() => ({}));
+              const ltp = Number(quoteData?.price);
+              if (!ltp || ltp <= 0) {
+                toast.error(`Could not get price for ${selectedTicker}. Try again later.`);
+                return;
+              }
+              const qty = Math.floor(capitalNum / ltp);
+              if (qty < 1) {
+                toast.error("Capital is too low for even 1 unit at current price.");
+                return;
+              }
+              const placeRes = await fetch(`${API_BASE}/api/broker/place-order`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  user_id: user.id,
+                  broker_name: brokerId,
+                  symbol: selectedTicker,
+                  qty,
+                  transaction_type: "BUY",
+                  order_type: "MARKET",
+                }),
+              });
+              const placeData = await placeRes.json().catch(() => ({}));
+              if (!placeRes.ok) {
+                const msg = typeof placeData.detail === "string" ? placeData.detail : "Order placement failed.";
+                throw new Error(msg);
+              }
+              const orderId = placeData?.orderid;
+              toast.success(orderId ? `Order placed. Angel One Order ID: ${orderId}` : "Order placed successfully.");
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "Live order failed.");
+            } finally {
+              setLiveDeploying(false);
+            }
           }}
         />
       </div>
