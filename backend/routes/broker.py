@@ -222,79 +222,116 @@ class PlaceOrderPayload(BaseModel):
   price: Optional[float] = Field(default=None, ge=0)
 
 
+def _get_smart_session(user_id: str, broker_name: str):
+  """Load credentials and return a SmartConnect instance with session set. Raises on failure."""
+  api_key = (os.getenv("ANGEL_API_KEY") or "").strip()
+  if not api_key:
+    raise ValueError("ANGEL_API_KEY not configured.")
+  supabase = get_supabase()
+  resp = (
+    supabase.table("broker_credentials")
+    .select("access_token, refresh_token")
+    .eq("user_id", user_id)
+    .eq("broker_name", broker_name)
+    .eq("is_active", True)
+    .limit(1)
+    .execute()
+  )
+  rows = getattr(resp, "data", None) or []
+  if not rows:
+    raise ValueError("No active broker credentials found for this user and broker.")
+  row = rows[0]
+  access_token = (row.get("access_token") or "").strip()
+  refresh_token = (row.get("refresh_token") or "").strip()
+  if not access_token:
+    raise ValueError("Broker session expired. Reconnect from Integrations.")
+  smart = SmartConnect(api_key=api_key)
+  smart.setAccessToken(access_token)
+  smart.setRefreshToken(refresh_token)
+  return smart
+
+
+def get_angel_positions(user_id: str, broker_name: str) -> List[Dict[str, Any]]:
+  """
+  Return open positions for this user/broker from Angel One.
+  Each item has tradingsymbol, netqty, etc. Used to avoid placing duplicate orders.
+  """
+  try:
+    smart = _get_smart_session(user_id, broker_name)
+    resp = smart.position()
+  except Exception as e:  # noqa: BLE001
+    logger.warning("get_angel_positions failed: %s", e)
+    return []
+  data = resp if isinstance(resp, dict) else getattr(resp, "data", resp) or {}
+  payload = data.get("data") if isinstance(data.get("data"), list) else (data if isinstance(data, list) else [])
+  return list(payload) if payload else []
+
+
+def place_order_impl(
+  user_id: str,
+  broker_name: str,
+  symbol: str,
+  qty: int,
+  transaction_type: str = "BUY",
+  order_type: str = "MARKET",
+  price: Optional[float] = None,
+) -> Dict[str, Any]:
+  """
+  Place an order (sync). Used by the HTTP endpoint and by the strategy monitor.
+  Returns {"ok": True, "orderid": "..."}. Raises on failure.
+  """
+  symbol_key = symbol.upper().replace(".NS", "").replace(" ", "")
+  resolved = _ANGEL_SYMBOL_MAP.get(symbol_key)
+  if not resolved:
+    raise ValueError(f"Symbol '{symbol}' not supported for live order.")
+  tradingsymbol, symboltoken, exchange = resolved
+  smart = _get_smart_session(user_id, broker_name)
+  orderparams: Dict[str, Any] = {
+    "variety": "NORMAL",
+    "tradingsymbol": tradingsymbol,
+    "symboltoken": symboltoken,
+    "transactiontype": transaction_type.upper(),
+    "exchange": exchange,
+    "ordertype": order_type.upper(),
+    "producttype": "INTRADAY",
+    "duration": "DAY",
+    "quantity": str(qty),
+  }
+  if order_type.upper() == "LIMIT" and price is not None:
+    orderparams["price"] = str(round(price, 2))
+  result = smart.placeOrder(orderparams)
+  data = result if isinstance(result, dict) else getattr(result, "data", result) or {}
+  orderid = data.get("data", data) if isinstance(data.get("data"), str) else (data.get("data") or data).get("orderid")
+  if not orderid:
+    orderid = data.get("orderid")
+  if not orderid:
+    raise ValueError("Broker did not return an order ID.")
+  return {"ok": True, "orderid": str(orderid)}
+
+
 @router.post("/place-order")
 async def place_order(payload: PlaceOrderPayload) -> Dict[str, Any]:
   """
   Place an order with the user's connected broker (Angel One). Uses stored access_token
   to set session and calls SmartConnect.placeOrder(). Returns orderid.
   """
-  api_key = (os.getenv("ANGEL_API_KEY") or "").strip()
-  if not api_key:
-    raise HTTPException(500, "ANGEL_API_KEY not configured.")
-
-  symbol_key = payload.symbol.upper().replace(".NS", "").replace(" ", "")
-  resolved = _ANGEL_SYMBOL_MAP.get(symbol_key)
-  if not resolved:
-    raise HTTPException(400, f"Symbol '{payload.symbol}' is not supported for live order. Use one of: {list(_ANGEL_SYMBOL_MAP.keys())}")
-  tradingsymbol, symboltoken, exchange = resolved
-
   try:
-    supabase = get_supabase()
-    resp = (
-      supabase.table("broker_credentials")
-      .select("access_token, refresh_token")
-      .eq("user_id", payload.user_id)
-      .eq("broker_name", payload.broker_name)
-      .eq("is_active", True)
-      .limit(1)
-      .execute()
+    return place_order_impl(
+      user_id=payload.user_id,
+      broker_name=payload.broker_name,
+      symbol=payload.symbol,
+      qty=payload.qty,
+      transaction_type=payload.transaction_type,
+      order_type=payload.order_type,
+      price=payload.price,
     )
-    rows = getattr(resp, "data", None) or []
-    if not rows:
-      raise HTTPException(404, "No active broker credentials found for this user and broker.")
-    row = rows[0]
-    access_token = (row.get("access_token") or "").strip()
-    refresh_token = (row.get("refresh_token") or "").strip()
-    if not access_token:
-      raise HTTPException(401, "Broker session expired. Reconnect from Integrations.")
-  except HTTPException:
-    raise
-  except Exception as e:  # noqa: BLE001
-    raise HTTPException(503, f"Failed to load broker credentials: {e}") from e
-
-  try:
-    smart = SmartConnect(api_key=api_key)
-    smart.setAccessToken(access_token)
-    smart.setRefreshToken(refresh_token)
-  except Exception as e:  # noqa: BLE001
-    raise HTTPException(401, f"Invalid broker session: {e}") from e
-
-  orderparams: Dict[str, Any] = {
-    "variety": "NORMAL",
-    "tradingsymbol": tradingsymbol,
-    "symboltoken": symboltoken,
-    "transactiontype": payload.transaction_type.upper(),
-    "exchange": exchange,
-    "ordertype": payload.order_type.upper(),
-    "producttype": "INTRADAY",
-    "duration": "DAY",
-    "quantity": str(payload.qty),
-  }
-  if payload.order_type.upper() == "LIMIT" and payload.price is not None:
-    orderparams["price"] = str(round(payload.price, 2))
-
-  try:
-    result = smart.placeOrder(orderparams)
+  except ValueError as e:
+    if "not supported" in str(e):
+      raise HTTPException(400, str(e))
+    if "credentials" in str(e).lower() or "session" in str(e).lower():
+      raise HTTPException(401, str(e))
+    raise HTTPException(400, str(e))
   except Exception as e:  # noqa: BLE001
     logger.warning("place_order failed: %s", e)
     raise HTTPException(400, f"Order placement failed: {e}") from e
-
-  data = result if isinstance(result, dict) else getattr(result, "data", result) or {}
-  orderid = data.get("data", data) if isinstance(data.get("data"), str) else (data.get("data") or data).get("orderid")
-  if not orderid:
-    orderid = data.get("orderid")
-  if not orderid:
-    raise HTTPException(500, "Broker did not return an order ID.")
-
-  return {"ok": True, "orderid": str(orderid)}
 

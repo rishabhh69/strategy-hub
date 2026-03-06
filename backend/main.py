@@ -144,6 +144,12 @@ async def _lifespan(app: FastAPI):
         timezone=ZoneInfo("Asia/Kolkata"),
         id="daily_broker_refresh",
     )
+    _broker_scheduler.add_job(
+        _run_strategy_monitor,
+        trigger="interval",
+        minutes=2,
+        id="strategy_monitor",
+    )
     _broker_scheduler.start()
     yield
     if _broker_scheduler:
@@ -1533,6 +1539,157 @@ async def get_saved_strategy(
     if not rows:
         raise HTTPException(404, "Saved strategy not found.")
     return rows[0]
+
+
+@app.delete("/api/strategies/{strategy_id}")
+async def delete_saved_strategy(
+    strategy_id: str,
+    user_id: str = Query(..., min_length=1, max_length=128),
+):
+    """
+    Delete a saved strategy. Only the owning user can delete (enforced via user_id + id match).
+    """
+    if not user_id:
+        raise HTTPException(400, "user_id required")
+    if not _sb_ok():
+        raise HTTPException(503, "Supabase is unreachable. Cannot delete strategy.")
+
+    rows = _sb_get(
+        "saved_strategies",
+        filters={"id": f"eq.{strategy_id}", "user_id": f"eq.{user_id}"},
+        limit=1,
+    )
+    if not rows:
+        raise HTTPException(404, "Saved strategy not found.")
+    _sb_delete("saved_strategies", {"id": strategy_id, "user_id": user_id})
+    return {"ok": True, "deleted": strategy_id}
+
+
+# ---------------------------------------------------------------------------
+# Live strategy deployment: save as 'Live' so Strategy Monitor can watch and place orders when conditions are met.
+# Create table in Supabase SQL Editor if missing:
+#   create table if not exists public.strategy_deployments (
+#     id uuid primary key default gen_random_uuid(),
+#     user_id uuid not null references auth.users(id) on delete cascade,
+#     broker_name text not null,
+#     strategy_id uuid,
+#     strategy_name text not null,
+#     symbol text not null,
+#     strategy_logic text not null,
+#     capital numeric not null default 0,
+#     status text not null default 'Live',
+#     created_at timestamptz default now(),
+#     updated_at timestamptz default now()
+#   );
+# ---------------------------------------------------------------------------
+class DeployStrategyRequest(BaseModel):
+    """Payload for POST /api/strategy/deploy. Saves deployment as Live; monitor will evaluate and place orders."""
+    model_config = _STRICT
+    user_id: str = Field(..., min_length=1, max_length=128)
+    broker_name: str = Field(..., min_length=1, max_length=64)
+    strategy_id: Optional[str] = Field(default=None, max_length=128)
+    strategy_name: str = Field(..., min_length=1, max_length=256)
+    symbol: str = Field(..., min_length=1, max_length=32)
+    strategy_logic: str = Field(..., min_length=1, max_length=200_000)
+    capital: float = Field(..., ge=0)
+
+
+@app.post("/api/strategy/deploy")
+async def deploy_strategy_live(req: DeployStrategyRequest):
+    """Save a strategy as 'Live' for the given broker. Strategy Monitor will evaluate conditions and place orders when met."""
+    if not _sb_ok():
+        raise HTTPException(503, "Supabase is unreachable. Cannot save deployment.")
+    payload = {
+        "user_id": req.user_id,
+        "broker_name": req.broker_name,
+        "strategy_id": req.strategy_id,
+        "strategy_name": req.strategy_name,
+        "symbol": req.symbol,
+        "strategy_logic": req.strategy_logic,
+        "capital": float(req.capital),
+        "status": "Live",
+    }
+    row = _sb_insert("strategy_deployments", payload)
+    if not row:
+        raise HTTPException(503, "Failed to save deployment to Supabase.")
+    return {"ok": True, "id": row.get("id"), "status": "Live", "message": "Strategy is live. Monitor will evaluate and place orders when conditions are met."}
+
+
+def _run_strategy_monitor() -> None:
+    """
+    Background job: find all Live angelone deployments, fetch live data, evaluate strategy logic,
+    and place an order only if (1) condition is TRUE and (2) no open position for that symbol.
+    """
+    if not _sb_ok():
+        return
+    try:
+        deployments = _sb_get(
+            "strategy_deployments",
+            filters={"status": "eq.Live", "broker_name": "eq.angelone"},
+            limit=100,
+        )
+    except Exception:
+        return
+    if not deployments:
+        return
+    from routes.broker import get_angel_positions, place_order_impl
+    for dep in deployments:
+        try:
+            user_id = dep.get("user_id")
+            broker_name = dep.get("broker_name")
+            symbol = (dep.get("symbol") or "").strip()
+            strategy_logic = (dep.get("strategy_logic") or "").strip()
+            capital = float(dep.get("capital") or 0)
+            if not user_id or not symbol or not strategy_logic or capital <= 0:
+                continue
+            sym = normalise(symbol)
+            candles = _yahoo_v8(sym, range_="5d", interval="1d")
+            if not candles or len(candles) < 2:
+                continue
+            df = pd.DataFrame(candles)
+            df["date"] = pd.to_datetime(df["time"], unit="s")
+            df = df.rename(columns={"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"})
+            df = df[["date", "open", "high", "low", "close", "volume"]]
+            g: Dict[str, Any] = {"__builtins__": builtins, "pd": pd, "np": np, "math": math}
+            loc: Dict[str, Any] = {}
+            exec(strategy_logic, g, loc)  # noqa: S102
+            if "strategy" not in loc:
+                continue
+            result_df = loc["strategy"](df.copy())
+            if result_df is None or len(result_df) == 0:
+                continue
+            # Only execute trade when strategy conditions are met: last bar must signal buy
+            last = result_df.iloc[-1]
+            signal = last.get("signal", 0)
+            position = last.get("position", 0)
+            try:
+                sig_val = int(signal) if signal is not None else 0
+                pos_val = int(position) if position is not None else 0
+            except (TypeError, ValueError):
+                sig_val, pos_val = 0, 0
+            buy_signal = (sig_val == 1 or pos_val == 1)
+            if not buy_signal:
+                continue
+            positions = get_angel_positions(user_id, broker_name)
+            tradingsymbol_like = symbol.upper().replace(".NS", "").replace(" ", "")
+            has_open = False
+            for pos in positions:
+                ts = (pos.get("tradingsymbol") or pos.get("symbol") or "").upper().replace(" ", "")
+                netqty = int(pos.get("netqty") or pos.get("quantity") or 0)
+                if (tradingsymbol_like in ts or ts in tradingsymbol_like) and netqty != 0:
+                    has_open = True
+                    break
+            if has_open:
+                continue
+            quote = _yahoo_v8_quote(sym)
+            price = float(quote.get("price", 0)) if quote else 0
+            if not price or price <= 0:
+                continue
+            qty = max(1, int(capital / price))
+            place_order_impl(user_id, broker_name, symbol, qty, "BUY", "MARKET")
+            logging.info("Strategy monitor placed order for user=%s symbol=%s qty=%s", user_id[:8], symbol, qty)
+        except Exception as e:  # noqa: BLE001
+            logging.warning("Strategy monitor tick failed for deployment %s: %s", dep.get("id"), e)
 
 
 # ---------------------------------------------------------------------------

@@ -683,48 +683,39 @@ Examples:
           onConfirmLive={async ({ brokerId, capital: capitalNum }) => {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user?.id) {
-              toast.error("You must be signed in to place a live order.");
+              toast.error("You must be signed in to deploy a live strategy.");
               return;
             }
             if (capitalNum <= 0) {
               toast.error("Enter a valid capital allocation (₹).");
               return;
             }
+            if (!backtestResult?.generated_code?.trim()) {
+              toast.error("Run a backtest first so the strategy can be evaluated live.");
+              return;
+            }
             setLiveDeploying(true);
             try {
-              const quoteRes = await fetch(`${API_BASE}/quote/${encodeURIComponent(selectedTicker)}`);
-              const quoteData = await quoteRes.json().catch(() => ({}));
-              const ltp = Number(quoteData?.price);
-              if (!ltp || ltp <= 0) {
-                toast.error(`Could not get price for ${selectedTicker}. Try again later.`);
-                return;
-              }
-              const qty = Math.floor(capitalNum / ltp);
-              if (qty < 1) {
-                toast.error("Capital is too low for even 1 unit at current price.");
-                return;
-              }
-              const placeRes = await fetch(`${API_BASE}/api/broker/place-order`, {
+              const deployRes = await fetch(`${API_BASE}/api/strategy/deploy`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   user_id: user.id,
                   broker_name: brokerId,
+                  strategy_name: strategyInput.trim().slice(0, 200) || "Backtest strategy",
                   symbol: selectedTicker,
-                  qty,
-                  transaction_type: "BUY",
-                  order_type: "MARKET",
+                  strategy_logic: backtestResult.generated_code.trim(),
+                  capital: capitalNum,
                 }),
               });
-              const placeData = await placeRes.json().catch(() => ({}));
-              if (!placeRes.ok) {
-                const msg = typeof placeData.detail === "string" ? placeData.detail : "Order placement failed.";
+              const deployData = await deployRes.json().catch(() => ({}));
+              if (!deployRes.ok) {
+                const msg = typeof deployData.detail === "string" ? deployData.detail : "Deploy failed.";
                 throw new Error(msg);
               }
-              const orderId = placeData?.orderid;
-              toast.success(orderId ? `Order placed. Angel One Order ID: ${orderId}` : "Order placed successfully.");
+              toast.success("Strategy is live. Orders will be placed automatically when conditions (e.g. RSI < 30) are met.");
             } catch (err) {
-              toast.error(err instanceof Error ? err.message : "Live order failed.");
+              toast.error(err instanceof Error ? err.message : "Live deployment failed.");
             } finally {
               setLiveDeploying(false);
             }

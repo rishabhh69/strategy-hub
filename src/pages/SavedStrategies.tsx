@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Eye, Trash2 } from "lucide-react";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -78,6 +79,31 @@ export default function SavedStrategies() {
   const fmtRatio = (n?: number | null) =>
     n != null && !Number.isNaN(n) ? n.toFixed(2) : "—";
 
+  const handleDelete = async (e: React.MouseEvent, strategyId: string, name: string) => {
+    e.stopPropagation();
+    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        toast.error("You must be signed in to delete strategies.");
+        return;
+      }
+      const res = await fetch(
+        `${API_BASE}/api/strategies/${encodeURIComponent(strategyId)}?user_id=${encodeURIComponent(user.id)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const msg = typeof data.detail === "string" ? data.detail : "Failed to delete strategy.";
+        throw new Error(msg);
+      }
+      toast.success("Strategy removed from your library.");
+      setStrategies((prev) => prev.filter((s) => s.id !== strategyId));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete strategy.");
+    }
+  };
+
   return (
     <MainLayout>
       <div className="p-4 md:p-6 max-w-7xl w-full h-full overflow-auto">
@@ -128,8 +154,7 @@ export default function SavedStrategies() {
             {strategies.map((s) => (
               <Card
                 key={s.id}
-                className="bg-card/80 border-border hover:border-border-bright cursor-pointer transition-colors flex flex-col"
-                onClick={() => navigate(`/saved-strategies/${s.id}`)}
+                className="bg-card/80 border-border hover:border-border-bright transition-colors flex flex-col"
               >
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between gap-2">
@@ -167,18 +192,40 @@ export default function SavedStrategies() {
                       </p>
                     </div>
                   </div>
-                  <div className="mt-auto flex items-center justify-between text-[10px] text-muted-foreground">
-                    <span>
-                      {s.total_trades != null ? `${s.total_trades} trades` : "Trades: —"}
-                    </span>
-                    {s.created_at && (
+                  <div className="mt-auto flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
                       <span>
-                        {new Date(s.created_at).toLocaleDateString("en-IN", {
-                          month: "short",
-                          day: "numeric",
-                        })}
+                        {s.total_trades != null ? `${s.total_trades} trades` : "Trades: —"}
                       </span>
-                    )}
+                      {s.created_at && (
+                        <span>
+                          {new Date(s.created_at).toLocaleDateString("en-IN", {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-muted-foreground hover:text-foreground"
+                        onClick={() => navigate(`/saved-strategies/${s.id}`)}
+                        title="View strategy"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-muted-foreground hover:text-destructive"
+                        onClick={(e) => handleDelete(e, s.id, s.name)}
+                        title="Delete strategy"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
