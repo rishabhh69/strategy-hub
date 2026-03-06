@@ -6,6 +6,7 @@ python-dotenv
 smartapi-python
 pyotp
 requests
+logzero
 
 # Tradeky Backend — production dependencies
 # Python 3.10+ recommended
