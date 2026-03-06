@@ -5,7 +5,8 @@ import {
   Settings, 
   ChevronLeft,
   Monitor,
-  Bookmark
+  Bookmark,
+  PlugZap,
 } from "lucide-react";
 import { NavLink, Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -40,6 +41,12 @@ const navItems = [
     icon: Monitor, 
     path: "/terminal",
     description: "Execute & monitor"
+  },
+  { 
+    title: "Integrations", 
+    icon: PlugZap, 
+    path: "/integrations",
+    description: "Broker connections"
   },
   { 
     title: "Saved Strategies", 

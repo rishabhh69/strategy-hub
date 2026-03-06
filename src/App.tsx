@@ -16,6 +16,7 @@ import Profile from "./pages/Profile";
 import Auth from "./pages/Auth";
 import AuthCallback from "./pages/AuthCallback";
 import LiveTerminal from "./pages/LiveTerminal";
+import Integrations from "./pages/Integrations";
 import AboutUs from "./pages/AboutUs";
 import Institutional from "./pages/Institutional";
 import Careers from "./pages/Careers";
@@ -46,6 +47,7 @@ const App = () => (
             <Route path="/live-terminal" element={<LiveTerminal />} />
             <Route path="/liveterminal" element={<Navigate to="/terminal" replace />} />
             <Route path="/LiveTerminal" element={<Navigate to="/terminal" replace />} />
+            <Route path="/integrations" element={<Integrations />} />
             <Route path="/about" element={<AboutUs />} />
             <Route path="/institutional" element={<Institutional />} />
             <Route path="/careers" element={<Careers />} />

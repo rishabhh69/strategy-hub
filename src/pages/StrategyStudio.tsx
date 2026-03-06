@@ -21,6 +21,7 @@ import { MainLayout } from "@/components/layout/MainLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { API_BASE } from "@/lib/api";
+import { DeploymentModal } from "@/components/DeploymentModal";
 
 const tickers = [
   { value: "NIFTY", label: "Nifty 50" },
@@ -86,6 +87,7 @@ export default function StrategyStudio() {
   const [saveName, setSaveName] = useState("");
   const [saveDescription, setSaveDescription] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deploymentOpen, setDeploymentOpen] = useState(false);
   
   const handleRunBacktest = async () => {
     if (!strategyInput.trim()) return;
@@ -202,6 +204,66 @@ export default function StrategyStudio() {
     toast.success('Opening Live Terminal — choose symbol & quantity, then click "Deploy Paper Bot".');
   };
 
+  const autoSaveForDeployment = async () => {
+    if (!backtestResult || !hasResults) {
+      toast.error("Run a backtest before deploying a strategy.");
+      return false;
+    }
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        toast.error("You must be signed in to deploy strategies.");
+        return false;
+      }
+      const equityCurve = downsampleEquityCurve(backtestResult.chart_data);
+      const m = backtestResult.metrics;
+      const autoName =
+        strategyInput.trim().slice(0, 80) ||
+        backtestResult.generated_code.trim().split("\n")[0].slice(0, 80) ||
+        "Untitled Strategy";
+
+      const payload = {
+        user_id: user.id,
+        name: autoName,
+        description: saveDescription.trim() || undefined,
+        code: backtestResult.generated_code,
+        ticker: selectedTicker,
+        cagr: m.cagr,
+        total_return: m.total_return,
+        max_drawdown: m.drawdown,
+        volatility: m.volatility,
+        sharpe_ratio: m.sharpe,
+        sortino_ratio: m.sortino,
+        win_rate: m.win_rate,
+        total_trades: m.num_trades,
+        equity_curve: equityCurve,
+      };
+
+      const res = await fetch(`${API_BASE}/api/strategies/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        // Auto-save failures should not block deployment; just log + toast.
+        const data = await res.json().catch(() => ({}));
+        const msg =
+          typeof data.detail === "string"
+            ? data.detail
+            : `Auto-save failed (HTTP ${res.status}). Deployment will continue.`;
+        toast.error(msg);
+      } else {
+        toast.success("Strategy auto-saved to your library before deployment.");
+      }
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to auto-save strategy.";
+      toast.error(msg);
+      return false;
+    }
+  };
+
   const handleSaveStrategy = async () => {
     if (!backtestResult || !hasResults) {
       toast.error("Run a backtest before saving a strategy.");
@@ -303,11 +365,14 @@ export default function StrategyStudio() {
               <>
                 <Button
                   variant="outline"
-                  onClick={handleDeployToLiveTerminal}
+                  onClick={async () => {
+                    const ok = await autoSaveForDeployment();
+                    if (ok) setDeploymentOpen(true);
+                  }}
                   className="border-primary/50 text-primary hover:bg-primary/10"
                 >
                   <Rocket className="w-4 h-4 mr-2" />
-                  Deploy to Live Terminal
+                  Deploy Strategy
                 </Button>
                 <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
                   <Button
@@ -569,6 +634,25 @@ Examples:
             </Tabs>
           </div>
         </div>
+
+        {/* Deployment modal */}
+        <DeploymentModal
+          open={deploymentOpen}
+          onOpenChange={setDeploymentOpen}
+          onConfirmPaper={handleDeployToLiveTerminal}
+          // Live execution is mocked for now
+          hasActiveBroker={true}
+          brokers={[
+            { id: "broker-1", label: "Zerodha - Prop Desk" },
+            { id: "broker-2", label: "Upstox - Client Pool" },
+          ]}
+          onConfirmLive={({ brokerId, capital }) => {
+            // In a future iteration, call backend to create a strategy_deployments row
+            // eslint-disable-next-line no-console
+            console.log("Live deploy", { brokerId, capital });
+            toast.success("Live deployment instruction recorded (mock).");
+          }}
+        />
       </div>
     </MainLayout>
   );
