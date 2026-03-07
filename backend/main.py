@@ -50,7 +50,7 @@ from fastapi.responses import JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import routes.broker as broker
-from routes.broker import refresh_all_broker_sessions
+from routes.broker import auto_refresh_sessions
 
 logging.getLogger("yfinance").setLevel(logging.WARNING)
 logging.getLogger("peewee").setLevel(logging.CRITICAL)
@@ -137,7 +137,7 @@ async def _lifespan(app: FastAPI):
     global _broker_scheduler
     _broker_scheduler = AsyncIOScheduler()
     _broker_scheduler.add_job(
-        refresh_all_broker_sessions,
+        auto_refresh_sessions,
         trigger="cron",
         hour=8,
         minute=45,

@@ -95,7 +95,7 @@ export default function Integrations() {
             : `Angel One login failed (HTTP ${res.status})`;
         throw new Error(msg);
       }
-      toast.success("Angel One connected successfully.");
+      toast.success("Angel One connected. Your connection will be kept active daily before market open.");
       setConnectDialogOpen(false);
       setLoading(true);
       await fetchBrokers();

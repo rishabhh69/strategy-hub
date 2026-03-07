@@ -1,5 +1,7 @@
 import logging
 import os
+import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -68,46 +70,71 @@ async def angelone_login(payload: AngelOneLoginPayload) -> Dict[str, Any]:
   except Exception as e:  # noqa: BLE001
     raise HTTPException(400, f"Angel One login failed: {e}") from e
 
-  # Persist broker_credentials row via Supabase: jwtToken→access_token, refreshToken→refresh_token, feedToken→feed_token
+  # Persist broker_credentials so user can execute trades and connection stays active (daily auto-refresh)
+  now_iso = datetime.now(timezone.utc).isoformat()
   try:
     supabase = get_supabase()
+    upsert_payload: Dict[str, Any] = {
+      "user_id": payload.user_id,
+      "broker_name": "angelone",
+      "client_id": client_id,
+      "pin": password,
+      "totp_secret": totp_secret,
+      "access_token": jwt_token,
+      "feed_token": feed_token,
+      "refresh_token": refresh_token,
+      "is_active": True,
+      "last_connected": now_iso,
+      "status": "Active",
+    }
     resp = (
       supabase.table("broker_credentials")
-      .upsert(
-        {
-          "user_id": payload.user_id,
-          "broker_name": "angelone",
-          "client_id": client_id,
-          "pin": password,
-          "totp_secret": totp_secret,
-          "access_token": jwt_token,
-          "feed_token": feed_token,
-          "refresh_token": refresh_token,
-          "is_active": True,
-        },
-        on_conflict="user_id,broker_name",
-      )
+      .upsert(upsert_payload, on_conflict="user_id,broker_name")
       .execute()
     )
   except Exception as e:  # noqa: BLE001
-    raise HTTPException(
-      503,
-      f"Database error while saving Angel One credentials (table broker_credentials). "
-      f"Please contact support with this message: {e}",
-    ) from e
+    err_str = str(e).lower()
+    if "column" in err_str or "unknown" in err_str:
+      for k in ("last_connected", "status"):
+        upsert_payload.pop(k, None)
+      try:
+        resp = (
+          supabase.table("broker_credentials")
+          .upsert(upsert_payload, on_conflict="user_id,broker_name")
+          .execute()
+        )
+      except Exception as e2:  # noqa: BLE001
+        raise HTTPException(
+          503,
+          f"Database error while saving Angel One credentials: {e2}",
+        ) from e2
+    else:
+      raise HTTPException(
+        503,
+        f"Database error while saving Angel One credentials: {e}",
+      ) from e
 
   return {"ok": True, "updated": getattr(resp, "data", None) or []}
 
 
-def refresh_all_broker_sessions() -> Dict[str, Any]:
+def _extract_angel_error_code(err: Exception) -> Optional[str]:
+  """Extract Angel One error code (e.g. AB1010, AG8001) from exception message if present."""
+  msg = str(err)
+  m = re.search(r"\b([A-Z]{2}\d{4,5})\b", msg, re.IGNORECASE)
+  return m.group(1) if m else None
+
+
+def auto_refresh_sessions() -> Dict[str, Any]:
   """
-  Refresh Angel One sessions for all connected users. Uses stored client_id, pin, and
-  totp_secret (or env ANGEL_TOTP_SECRET) per row. On failure (e.g. user changed PIN),
-  sets that user's is_active to False so they can reconnect manually.
+  Refresh Angel One sessions for all users in broker_credentials. Runs daily at 08:45 AM IST.
+  1. Query all rows (angelone), get client_id, pin, totp_secret.
+  2. Generate 6-digit TOTP, call generateSession(client_id, pin, totp).
+  3. Update record with new access_token, refresh_token, feed_token; set status Active, last_connected.
+  4. On failure (e.g. invalid PIN), set status Inactive and log error code (e.g. AB1010).
   """
   api_key = (os.getenv("ANGEL_API_KEY") or "").strip()
   if not api_key:
-    logger.warning("refresh_all_broker_sessions: ANGEL_API_KEY not set, skipping.")
+    logger.warning("auto_refresh_sessions: ANGEL_API_KEY not set, skipping.")
     return {"refreshed": 0, "failed": 0, "errors": ["ANGEL_API_KEY not configured"]}
 
   default_totp_secret = (os.getenv("ANGEL_TOTP_SECRET") or "").strip()
@@ -115,6 +142,7 @@ def refresh_all_broker_sessions() -> Dict[str, Any]:
   errors: List[Dict[str, Any]] = []
   refreshed = 0
   failed = 0
+  now_iso = datetime.now(timezone.utc).isoformat()
 
   try:
     resp = (
@@ -124,7 +152,7 @@ def refresh_all_broker_sessions() -> Dict[str, Any]:
       .execute()
     )
   except Exception as e:  # noqa: BLE001
-    logger.exception("refresh_all_broker_sessions: failed to fetch credentials")
+    logger.exception("auto_refresh_sessions: failed to fetch credentials")
     return {"refreshed": 0, "failed": 0, "errors": [str(e)]}
 
   rows = getattr(resp, "data", None) or []
@@ -157,41 +185,85 @@ def refresh_all_broker_sessions() -> Dict[str, Any]:
       if not jwt_token or not feed_token:
         raise ValueError("Angel One did not return jwtToken or feedToken")
     except Exception as e:  # noqa: BLE001
-      logger.warning("refresh_all_broker_sessions: refresh failed for user_id=%s: %s", user_id, e)
-      errors.append({"user_id": user_id, "error": str(e)})
+      code = _extract_angel_error_code(e)
+      err_msg = str(e)
+      logger.warning(
+        "auto_refresh_sessions: refresh failed for user_id=%s error_code=%s msg=%s",
+        user_id, code or "—", err_msg,
+      )
+      errors.append({"user_id": user_id, "error": err_msg, "error_code": code})
       _set_broker_inactive(supabase, user_id)
       failed += 1
       continue
 
+    update_payload: Dict[str, Any] = {
+      "access_token": jwt_token,
+      "refresh_token": refresh_token,
+      "feed_token": feed_token,
+      "is_active": True,
+      "last_connected": now_iso,
+      "status": "Active",
+    }
     try:
-      supabase.table("broker_credentials").update({
-        "access_token": jwt_token,
-        "refresh_token": refresh_token,
-        "feed_token": feed_token,
-        "is_active": True,
-      }).eq("user_id", user_id).eq("broker_name", "angelone").execute()
+      supabase.table("broker_credentials").update(update_payload).eq(
+        "user_id", user_id
+      ).eq("broker_name", "angelone").execute()
       refreshed += 1
     except Exception as e:  # noqa: BLE001
-      logger.warning("refresh_all_broker_sessions: DB update failed for user_id=%s: %s", user_id, e)
-      errors.append({"user_id": user_id, "error": f"DB update: {e}"})
-      failed += 1
+      err_str = str(e).lower()
+      if "column" in err_str or "unknown" in err_str:
+        for key in ("last_connected", "status"):
+          update_payload.pop(key, None)
+        try:
+          supabase.table("broker_credentials").update(update_payload).eq(
+            "user_id", user_id
+          ).eq("broker_name", "angelone").execute()
+          refreshed += 1
+        except Exception as e2:  # noqa: BLE001
+          logger.warning("auto_refresh_sessions: DB update failed for user_id=%s: %s", user_id, e2)
+          errors.append({"user_id": user_id, "error": str(e2)})
+          failed += 1
+      else:
+        logger.warning("auto_refresh_sessions: DB update failed for user_id=%s: %s", user_id, e)
+        errors.append({"user_id": user_id, "error": str(e)})
+        failed += 1
 
   return {"refreshed": refreshed, "failed": failed, "errors": errors}
 
 
+def refresh_all_broker_sessions() -> Dict[str, Any]:
+  """Alias for auto_refresh_sessions (used by admin/refresh-all and scheduler)."""
+  return auto_refresh_sessions()
+
+
 def _set_broker_inactive(supabase, user_id: str) -> None:
+  """Set broker to Inactive on refresh failure (invalid PIN, error code e.g. AB1010)."""
+  payload: Dict[str, Any] = {"is_active": False, "status": "Inactive"}
   try:
-    supabase.table("broker_credentials").update({
-      "is_active": False,
-    }).eq("user_id", user_id).eq("broker_name", "angelone").execute()
+    supabase.table("broker_credentials").update(payload).eq(
+      "user_id", user_id
+    ).eq("broker_name", "angelone").execute()
   except Exception as e:  # noqa: BLE001
-    logger.warning("_set_broker_inactive failed for user_id=%s: %s", user_id, e)
+    payload.pop("status", None)
+    try:
+      supabase.table("broker_credentials").update(payload).eq(
+        "user_id", user_id
+      ).eq("broker_name", "angelone").execute()
+    except Exception as e2:  # noqa: BLE001
+      logger.warning("_set_broker_inactive failed for user_id=%s: %s", user_id, e2)
 
 
 @router.post("/admin/refresh-all")
 async def admin_refresh_all() -> Dict[str, Any]:
   """Trigger refresh of all Angel One broker sessions (for testing or manual run)."""
-  result = refresh_all_broker_sessions()
+  result = auto_refresh_sessions()
+  return {"ok": True, **result}
+
+
+@router.post("/refresh-test")
+async def refresh_test() -> Dict[str, Any]:
+  """Manual trigger for auto_refresh_sessions to verify daily login works (e.g. before market open)."""
+  result = auto_refresh_sessions()
   return {"ok": True, **result}
 
 
