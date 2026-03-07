@@ -22,21 +22,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { API_BASE } from "@/lib/api";
 import { DeploymentModal } from "@/components/DeploymentModal";
-
-const tickers = [
-  { value: "NIFTY", label: "Nifty 50" },
-  { value: "BANKNIFTY", label: "Bank Nifty" },
-  { value: "SENSEX", label: "Sensex" },
-  { value: "RELIANCE", label: "RELIANCE.NS" },
-  { value: "TCS", label: "TCS.NS" },
-  { value: "HDFCBANK", label: "HDFCBANK.NS" },
-  { value: "INFY", label: "INFY.NS" },
-  { value: "ICICIBANK", label: "ICICIBANK.NS" },
-  { value: "BAJFINANCE", label: "BAJFINANCE.NS" },
-  { value: "WIPRO", label: "WIPRO.NS" },
-  { value: "TATAMOTORS", label: "TATAMOTORS.NS" },
-  { value: "SBIN", label: "SBIN.NS" },
-];
+import {
+  DEFAULT_INSTRUMENT,
+  getInstrumentByValueOrDefault,
+  SYMBOL_GROUPS,
+  type Instrument,
+} from "@/lib/symbolMap";
+import { SelectGroup, SelectLabel } from "@/components/ui/select";
 
 const MAX_EQUITY_POINTS = 800;
 
@@ -77,7 +69,7 @@ function downsampleEquityCurve(
 
 export default function StrategyStudio() {
   const navigate = useNavigate();
-  const [selectedTicker, setSelectedTicker] = useState("NIFTY");
+  const [selectedInstrument, setSelectedInstrument] = useState<Instrument>(DEFAULT_INSTRUMENT);
   const [strategyInput, setStrategyInput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [hasResults, setHasResults] = useState(false);
@@ -145,7 +137,7 @@ export default function StrategyStudio() {
           .from("sentiment_logs")
           .insert({
             user_id: user.id,
-            ticker: selectedTicker,
+            ticker: selectedInstrument.value,
             prompt: strategyInput,
             result_summary: null,
           })
@@ -164,7 +156,7 @@ export default function StrategyStudio() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ticker: selectedTicker,
+          ticker: selectedInstrument.value,
           prompt: strategyInput,
         }),
       });
@@ -236,7 +228,7 @@ export default function StrategyStudio() {
     const logicText = backtestResult.generated_code.trim();
     // Pass strategy inline to Live Terminal so deploy works without Supabase save
     navigate("/terminal", {
-      state: { fromStudio: true, title, logicText },
+      state: { fromStudio: true, title, logicText, symbolValue: selectedInstrument.value },
     });
     toast.success('Opening Live Terminal — choose symbol & quantity, then click "Deploy Paper Bot".');
   };
@@ -264,7 +256,7 @@ export default function StrategyStudio() {
         name: autoName,
         description: saveDescription.trim() || undefined,
         code: backtestResult.generated_code,
-        ticker: selectedTicker,
+        ticker: selectedInstrument.value,
         cagr: m.cagr,
         total_return: m.total_return,
         max_drawdown: m.drawdown,
@@ -327,7 +319,7 @@ export default function StrategyStudio() {
         name: saveName.trim(),
         description: saveDescription.trim() || undefined,
         code: backtestResult.generated_code,
-        ticker: selectedTicker,
+        ticker: selectedInstrument.value,
         cagr: m.cagr,
         total_return: m.total_return,
         max_drawdown: m.drawdown,
@@ -377,15 +369,23 @@ export default function StrategyStudio() {
           </div>
           
           <div className="flex items-center gap-3">
-            <Select value={selectedTicker} onValueChange={setSelectedTicker}>
+            <Select
+              value={selectedInstrument.value}
+              onValueChange={(v) => setSelectedInstrument(getInstrumentByValueOrDefault(v))}
+            >
               <SelectTrigger className="w-[180px] bg-card border-border">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {tickers.map((ticker) => (
-                  <SelectItem key={ticker.value} value={ticker.value}>
-                    <span className="font-mono">{ticker.label}</span>
-                  </SelectItem>
+                {SYMBOL_GROUPS.map((group) => (
+                  <SelectGroup key={group.heading}>
+                    <SelectLabel className="text-muted-foreground font-medium">{group.heading}</SelectLabel>
+                    {group.instruments.map((inst) => (
+                      <SelectItem key={inst.value} value={inst.value}>
+                        <span className="font-mono">{inst.label}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 ))}
               </SelectContent>
             </Select>
@@ -703,7 +703,9 @@ Examples:
                   user_id: user.id,
                   broker_name: brokerId,
                   strategy_name: strategyInput.trim().slice(0, 200) || "Backtest strategy",
-                  symbol: selectedTicker,
+                  symbol: selectedInstrument.value,
+                  angel_symbol: selectedInstrument.angelSymbol,
+                  token: selectedInstrument.token,
                   strategy_logic: backtestResult.generated_code.trim(),
                   capital: capitalNum,
                 }),

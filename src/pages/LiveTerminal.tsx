@@ -4,7 +4,7 @@ import { Button }    from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge }     from "@/components/ui/badge";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectItem, SelectGroup, SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   TrendingUp, TrendingDown, Activity, AlertTriangle, Square,
@@ -17,6 +17,13 @@ import { toast }              from "sonner";
 import { supabase }           from "@/integrations/supabase/client";
 
 import { API_BASE } from "@/lib/api";
+import {
+  DEFAULT_INSTRUMENT,
+  getInstrumentByValue,
+  getInstrumentByValueOrDefault,
+  SYMBOL_GROUPS,
+  type Instrument,
+} from "@/lib/symbolMap";
 
 /** Normalize API error detail (FastAPI 422 returns detail as array of { msg }). */
 function apiErrorMsg(detail: unknown, fallback: string): string {
@@ -37,22 +44,6 @@ function apiErrorMsg(detail: unknown, fallback: string): string {
 const STARTING_CAPITAL = 1_00_000;          // ₹1,00,000
 const PAPER_VERSION   = "v3";              // bump when PersistedPaper schema changes
 
-const TICKERS = [
-  { value: "NIFTY",      label: "NIFTY 50",    group: "Index"  },
-  { value: "BANKNIFTY",  label: "BANK NIFTY",  group: "Index"  },
-  { value: "SENSEX",     label: "SENSEX",      group: "Index"  },
-  { value: "RELIANCE",   label: "RELIANCE",     group: "Stock"  },
-  { value: "HDFCBANK",   label: "HDFC BANK",    group: "Stock"  },
-  { value: "TCS",        label: "TCS",          group: "Stock"  },
-  { value: "INFY",       label: "INFOSYS",      group: "Stock"  },
-  { value: "BAJFINANCE", label: "BAJAJ FINANCE", group: "Stock"  },
-  { value: "TATAMOTORS", label: "TATA MOTORS",   group: "Stock"  },
-  { value: "SBIN",       label: "SBI",          group: "Stock"  },
-  { value: "ICICIBANK",  label: "ICICI BANK",   group: "Stock"  },
-  { value: "BHARTIARTL", label: "AIRTEL",       group: "Stock"  },
-  { value: "WIPRO",      label: "WIPRO",        group: "Stock"  },
-  { value: "MARUTI",     label: "MARUTI",       group: "Stock"  },
-];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Position {
@@ -204,21 +195,20 @@ export default function LiveTerminal() {
   const [selectedBot,   setSelectedBot]   = useState<DeployedBot | null>(null);
   const [strategies,    setStrategies]    = useState<Strategy[]>([]);
   const [deployStratId, setDeployStratId] = useState("");
-  const [deployTicker,  setDeployTicker]  = useState("NIFTY");
+  const [deployInstrument,  setDeployInstrument]  = useState<Instrument>(DEFAULT_INSTRUMENT);
   const [deployQty,     setDeployQty]     = useState(50);
   const [deploying,     setDeploying]     = useState(false);
   const [inlineStrategy, setInlineStrategy] = useState<{ title: string; logicText: string } | null>(null);
   const location = useLocation();
 
   // Chart / quote
-  const [chartTicker,   setChartTicker]  = useState("NIFTY");
+  const [selectedInstrument, setSelectedInstrument] = useState<Instrument>(DEFAULT_INSTRUMENT);
   const [chartInterval, setChartInterval] = useState<"1m" | "5m">("5m");
   const [livePrice,     setLivePrice]   = useState<number | null>(null);
   const [liveChange,   setLiveChange]   = useState(0);
   const [quoteLoading, setQuoteLoading] = useState(false);
 
   // Trade execution
-  const [tradeTicker,  setTradeTicker]  = useState("NIFTY");
   const [tradeQty,     setTradeQty]     = useState(1);
   const [tradeLoading, setTradeLoading] = useState<"buy" | "sell" | null>(null);
   const [orderType,    setOrderType]    = useState<"market" | "limit">("market");
@@ -279,13 +269,15 @@ export default function LiveTerminal() {
       title?: string;
       logicText?: string;
       ticker?: string;
+      symbolValue?: string;
     } | null;
     if ((state?.fromStudio || state?.fromSavedStrategy) && state?.logicText) {
       setInlineStrategy({ title: state.title || "Backtest strategy", logicText: state.logicText });
-      if (state.ticker) {
-        setDeployTicker(state.ticker);
-        setChartTicker(state.ticker);
-        setTradeTicker(state.ticker);
+      const value = state.symbolValue ?? state.ticker;
+      if (value) {
+        const inst = getInstrumentByValueOrDefault(value);
+        setSelectedInstrument(inst);
+        setDeployInstrument(inst);
       }
     }
   }, [location.state]);
@@ -297,7 +289,11 @@ export default function LiveTerminal() {
       if (saved) {
         const bots: DeployedBot[] = JSON.parse(saved);
         setDeployedBots(bots);
-        if (bots.length) { setSelectedBot(bots[0]); setChartTicker(bots[0].ticker); }
+        if (bots.length) {
+          setSelectedBot(bots[0]);
+          const inst = getInstrumentByValueOrDefault(bots[0].ticker);
+          setSelectedInstrument(inst);
+        }
       }
     } catch {}
   }, []);
@@ -437,7 +433,7 @@ export default function LiveTerminal() {
     const poll = async () => {
       setQuoteLoading(true);
       try {
-        const r = await fetch(`${API_BASE}/quote/${encodeURIComponent(chartTicker)}`);
+        const r = await fetch(`${API_BASE}/quote/${encodeURIComponent(selectedInstrument.value)}`);
         if (r.ok && !cancelled) {
           const d = await r.json();
           setLivePrice(d.price ?? null);
@@ -451,7 +447,7 @@ export default function LiveTerminal() {
     const id = setInterval(poll, 15_000);
     return () => { cancelled = true; clearInterval(id); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartTicker]);
+  }, [selectedInstrument.value]);
 
   // ── 10. Unrealized P&L — poll prices for open positions (15 s) ───────────────
   useEffect(() => {
@@ -647,7 +643,7 @@ export default function LiveTerminal() {
     try {
       const payload: Record<string, unknown> = {
         user_id:     uid,
-        symbol:      (tradeTicker || "").trim() || "NIFTY",
+        symbol:      (selectedInstrument?.value || "").trim() || DEFAULT_INSTRUMENT.value,
         quantity:    tradeQty,
         side,
         order_type:  orderType,
@@ -668,14 +664,14 @@ export default function LiveTerminal() {
 
       if (data.status === "pending") {
         // Limit order queued
-        const msg = data.message ?? `Limit order queued: ${side.toUpperCase()} ${tradeQty} ${tradeTicker} @ ₹${fmt(Number(limitPrice))}`;
+        const msg = data.message ?? `Limit order queued: ${side.toUpperCase()} ${tradeQty} ${selectedInstrument?.label ?? selectedInstrument?.value} @ ₹${fmt(Number(limitPrice))}`;
         setOrderLog(prev => [{ time: now, type: "info", message: msg }, ...prev]);
         fetchPendingOrders(uid);
         setCentreTab("pending");
         toast.info(msg);
       } else {
         // Market order filled
-        const msg = data.message ?? `${side.toUpperCase()} ${tradeQty} ${tradeTicker} @ ₹${fmt(data.executed_price)}`;
+        const msg = data.message ?? `${side.toUpperCase()} ${tradeQty} ${selectedInstrument?.label ?? selectedInstrument?.value} @ ₹${fmt(data.executed_price)}`;
         setOrderLog(prev => [{ time: now, type: "trade", action: side, message: msg, pnl: data.realized_pnl }, ...prev]);
         if (data.new_balance !== undefined) setPaperBalance(data.new_balance);
         if (data.new_day_pnl !== undefined) setDayPnl(data.new_day_pnl);
@@ -684,7 +680,7 @@ export default function LiveTerminal() {
         const pnlNote = side === "sell" && data.realized_pnl !== undefined
           ? `  |  P&L ${data.realized_pnl >= 0 ? "+" : ""}₹${fmt(data.realized_pnl)}`
           : "";
-        toast.success(`${side.toUpperCase()} filled — ${tradeQty} ${tradeTicker} @ ₹${fmt(data.executed_price)}${pnlNote}`);
+        toast.success(`${side.toUpperCase()} filled — ${tradeQty} ${selectedInstrument?.label ?? selectedInstrument?.value} @ ₹${fmt(data.executed_price)}${pnlNote}`);
       }
     } catch (err: any) {
       const msg = err.message ?? "Trade failed";
@@ -696,11 +692,11 @@ export default function LiveTerminal() {
 
   // ── Close Position shortcut ───────────────────────────────────────────────────
   const closePosition = async (pos: Position) => {
-    setTradeTicker(pos.symbol);
+    setSelectedInstrument(getInstrumentByValueOrDefault(pos.symbol));
     setTradeQty(pos.quantity);
     // Slight delay so state settles
     setTimeout(() => {
-      setTradeTicker(pos.symbol);
+      setSelectedInstrument(getInstrumentByValueOrDefault(pos.symbol));
       setTradeQty(pos.quantity);
     }, 0);
     const uid = (userId ?? "").trim();
@@ -768,7 +764,7 @@ export default function LiveTerminal() {
   // ── Deploy Bot ────────────────────────────────────────────────────────────────
   const deployBot = async () => {
     const uid = (userId || "").trim();
-    const symbol = (deployTicker || "").trim();
+    const symbol = (deployInstrument?.value || "").trim();
     if (!uid) {
       toast.error("Please sign in or refresh the page.");
       return;
@@ -812,12 +808,12 @@ export default function LiveTerminal() {
       const data = await res.json();
       const bot_id = data.bot_id as string;
 
-      const label = TICKERS.find(t => t.value === deployTicker)?.label ?? deployTicker;
+      const label = getInstrumentByValue(deployInstrument?.value)?.label ?? deployInstrument?.value ?? "—";
       const bot: DeployedBot = {
         id:            useInline ? "inline" : strat!.id,
         bot_id,
         strategyTitle: title,
-        ticker:        deployTicker,
+        ticker:        deployInstrument.value,
         label,
         status:        "scanning",
         pnl:           0,
@@ -828,7 +824,7 @@ export default function LiveTerminal() {
       setDeployedBots(updated);
       localStorage.setItem("tradeky_bots", JSON.stringify(updated));
       setSelectedBot(bot);
-      setChartTicker(bot.ticker);
+      setSelectedInstrument(getInstrumentByValueOrDefault(bot.ticker));
 
       const now = new Date().toLocaleTimeString("en-IN", { hour12: false });
       setOrderLog(prev => [{
@@ -864,7 +860,7 @@ export default function LiveTerminal() {
   const netLiquidation = paperBalance + investedValue + unrealizedPnl;
   const totalPnl       = netLiquidation - STARTING_CAPITAL;
   const totalPnlPct    = (totalPnl / STARTING_CAPITAL) * 100;
-  const chartLabel     = TICKERS.find(t => t.value === chartTicker)?.label ?? chartTicker;
+  const chartLabel     = selectedInstrument?.label ?? selectedInstrument?.value ?? "—";
   const marketOpen     = isNSEOpen();
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -998,13 +994,17 @@ export default function LiveTerminal() {
               </CardHeader>
               <CardContent className="p-3 space-y-2.5">
                 {/* Ticker */}
-                <Select value={tradeTicker} onValueChange={v => { setTradeTicker(v); setChartTicker(v); setLivePrice(null); setLiveChange(0); }}>
+                <Select value={selectedInstrument.value} onValueChange={v => { setSelectedInstrument(getInstrumentByValueOrDefault(v)); setLivePrice(null); setLiveChange(0); }}>
                   <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <div className="text-[10px] text-muted-foreground px-2 py-1 font-semibold">INDICES</div>
-                    {TICKERS.filter(t => t.group === "Index").map(t => <SelectItem key={t.value} value={t.value} className="text-xs">{t.label}</SelectItem>)}
-                    <div className="text-[10px] text-muted-foreground px-2 py-1 font-semibold mt-1">STOCKS</div>
-                    {TICKERS.filter(t => t.group === "Stock").map(t => <SelectItem key={t.value} value={t.value} className="text-xs">{t.label}</SelectItem>)}
+                    {SYMBOL_GROUPS.map((group) => (
+                      <SelectGroup key={group.heading}>
+                        <SelectLabel className="text-[10px] text-muted-foreground font-semibold">{group.heading}</SelectLabel>
+                        {group.instruments.map((inst) => (
+                          <SelectItem key={inst.value} value={inst.value} className="text-xs">{inst.label}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
                   </SelectContent>
                 </Select>
 
@@ -1099,10 +1099,17 @@ export default function LiveTerminal() {
                 )}
 
                 <div className="grid grid-cols-2 gap-2">
-                  <Select value={deployTicker} onValueChange={setDeployTicker}>
+                  <Select value={deployInstrument.value} onValueChange={v => setDeployInstrument(getInstrumentByValueOrDefault(v))}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {TICKERS.map(t => <SelectItem key={t.value} value={t.value} className="text-xs">{t.label}</SelectItem>)}
+                      {SYMBOL_GROUPS.map((group) => (
+                        <SelectGroup key={group.heading}>
+                          <SelectLabel className="text-[10px] text-muted-foreground font-semibold">{group.heading}</SelectLabel>
+                          {group.instruments.map((inst) => (
+                            <SelectItem key={inst.value} value={inst.value} className="text-xs">{inst.label}</SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
                     </SelectContent>
                   </Select>
                   <input type="number" min={1} value={deployQty}
@@ -1166,7 +1173,7 @@ export default function LiveTerminal() {
                         key={bot.id}
                         onClick={() => {
                           setSelectedBot(isSelected ? null : bot);
-                          setChartTicker(bot.ticker);
+                          setSelectedInstrument(getInstrumentByValueOrDefault(bot.ticker));
                         }}
                         className={`cursor-pointer transition-all duration-200 ${
                           isSelected ? "border-primary bg-primary/5 shadow-md" : "hover:border-border/80"
@@ -1445,8 +1452,8 @@ export default function LiveTerminal() {
               </CardHeader>
               <CardContent className="flex-1 p-2 min-h-0 overflow-hidden">
                 <TradingViewChart
-                  key={`${chartTicker}-${chartInterval}`}
-                  ticker={chartTicker}
+                  key={`${selectedInstrument?.value ?? DEFAULT_INSTRUMENT.value}-${chartInterval}`}
+                  ticker={selectedInstrument?.value ?? DEFAULT_INSTRUMENT.value}
                   interval={chartInterval}
                   pollInterval={15_000}
                   height={270}

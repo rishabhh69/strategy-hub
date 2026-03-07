@@ -1592,11 +1592,17 @@ class DeployStrategyRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=32)
     strategy_logic: str = Field(..., min_length=1, max_length=200_000)
     capital: float = Field(..., ge=0)
+    angel_symbol: Optional[str] = Field(default=None, max_length=64)
+    token: Optional[str] = Field(default=None, max_length=32)
 
 
 @app.post("/api/strategy/deploy")
 async def deploy_strategy_live(req: DeployStrategyRequest):
-    """Save a strategy as 'Live' for the given broker. Strategy Monitor will evaluate conditions and place orders when met."""
+    """
+    Save strategy as 'Live' and push the strategy code to the deployment.
+    Strategy Monitor runs this code every tick and places a broker order only when
+    all strategy conditions are met (e.g. last bar signal == 1 and no open position).
+    """
     if not _sb_ok():
         raise HTTPException(503, "Supabase is unreachable. Cannot save deployment.")
     payload = {
@@ -1609,6 +1615,10 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
         "capital": float(req.capital),
         "status": "Live",
     }
+    if req.angel_symbol is not None:
+        payload["angel_symbol"] = req.angel_symbol
+    if req.token is not None:
+        payload["token"] = req.token
     row = _sb_insert("strategy_deployments", payload)
     if not row:
         raise HTTPException(503, "Failed to save deployment to Supabase.")
@@ -1617,8 +1627,9 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
 
 def _run_strategy_monitor() -> None:
     """
-    Background job: find all Live angelone deployments, fetch live data, evaluate strategy logic,
-    and place an order only if (1) condition is TRUE and (2) no open position for that symbol.
+    Background job: find all Live angelone deployments, fetch live data, evaluate strategy logic.
+    Places a broker order only when (1) strategy conditions are met (last bar signal/position == buy)
+    and (2) no open position for that symbol. Otherwise no order is placed.
     """
     if not _sb_ok():
         return
@@ -1686,7 +1697,12 @@ def _run_strategy_monitor() -> None:
             if not price or price <= 0:
                 continue
             qty = max(1, int(capital / price))
-            place_order_impl(user_id, broker_name, symbol, qty, "BUY", "MARKET")
+            angel_sym = dep.get("angel_symbol") or None
+            token_val = dep.get("token") or None
+            place_order_impl(
+                user_id, broker_name, symbol, qty, "BUY", "MARKET",
+                angel_symbol=angel_sym, token=token_val,
+            )
             logging.info("Strategy monitor placed order for user=%s symbol=%s qty=%s", user_id[:8], symbol, qty)
         except Exception as e:  # noqa: BLE001
             logging.warning("Strategy monitor tick failed for deployment %s: %s", dep.get("id"), e)

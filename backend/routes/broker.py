@@ -292,6 +292,10 @@ class PlaceOrderPayload(BaseModel):
   transaction_type: str = Field(..., pattern="^(BUY|SELL)$")
   order_type: str = Field(..., pattern="^(MARKET|LIMIT)$")
   price: Optional[float] = Field(default=None, ge=0)
+  # When provided by frontend (from symbolMap), skip server-side symbol resolution
+  angel_symbol: Optional[str] = Field(default=None, max_length=64)
+  token: Optional[str] = Field(default=None, max_length=32)
+  exchange: Optional[str] = Field(default="NSE", max_length=8)
 
 
 def _get_smart_session(user_id: str, broker_name: str):
@@ -347,23 +351,30 @@ def place_order_impl(
   transaction_type: str = "BUY",
   order_type: str = "MARKET",
   price: Optional[float] = None,
+  angel_symbol: Optional[str] = None,
+  token: Optional[str] = None,
+  exchange: Optional[str] = None,
 ) -> Dict[str, Any]:
   """
-  Place an order (sync). Used by the HTTP endpoint and by the strategy monitor.
-  Returns {"ok": True, "orderid": "..."}. Raises on failure.
+  Place an order (sync). When angel_symbol and token are provided, use them; else resolve from symbol map.
   """
-  symbol_key = symbol.upper().replace(".NS", "").replace(" ", "")
-  resolved = _ANGEL_SYMBOL_MAP.get(symbol_key)
-  if not resolved:
-    raise ValueError(f"Symbol '{symbol}' not supported for live order.")
-  tradingsymbol, symboltoken, exchange = resolved
+  if angel_symbol and token:
+    tradingsymbol = angel_symbol.strip()
+    symboltoken = token.strip()
+    exchange_str = (exchange or "NSE").strip().upper()
+  else:
+    symbol_key = symbol.upper().replace(".NS", "").replace(" ", "")
+    resolved = _ANGEL_SYMBOL_MAP.get(symbol_key)
+    if not resolved:
+      raise ValueError(f"Symbol '{symbol}' not supported for live order.")
+    tradingsymbol, symboltoken, exchange_str = resolved
   smart = _get_smart_session(user_id, broker_name)
   orderparams: Dict[str, Any] = {
     "variety": "NORMAL",
     "tradingsymbol": tradingsymbol,
     "symboltoken": symboltoken,
     "transactiontype": transaction_type.upper(),
-    "exchange": exchange,
+    "exchange": exchange_str,
     "ordertype": order_type.upper(),
     "producttype": "INTRADAY",
     "duration": "DAY",
@@ -384,8 +395,8 @@ def place_order_impl(
 @router.post("/place-order")
 async def place_order(payload: PlaceOrderPayload) -> Dict[str, Any]:
   """
-  Place an order with the user's connected broker (Angel One). Uses stored access_token
-  to set session and calls SmartConnect.placeOrder(). Returns orderid.
+  Place an order with the user's connected broker (Angel One). When angel_symbol and token
+  are provided (from frontend symbolMap), they are used directly; otherwise symbol is resolved via map.
   """
   try:
     return place_order_impl(
@@ -396,6 +407,9 @@ async def place_order(payload: PlaceOrderPayload) -> Dict[str, Any]:
       transaction_type=payload.transaction_type,
       order_type=payload.order_type,
       price=payload.price,
+      angel_symbol=payload.angel_symbol,
+      token=payload.token,
+      exchange=payload.exchange,
     )
   except ValueError as e:
     if "not supported" in str(e):
