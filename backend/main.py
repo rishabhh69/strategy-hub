@@ -1108,6 +1108,28 @@ def _sb_insert_raise(table: str, data: Dict) -> Dict:
         raise
 
 
+def _sb_insert_try(table: str, data: Dict) -> Dict:
+    """Try insert even when marked down; on success set _SB_REACHABLE = True so save works after transient failure."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError("Supabase not configured: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in backend/.env")
+    try:
+        r = _YF_SESSION.post(
+            f"{SUPABASE_URL}/rest/v1/{table}",
+            headers=_sb_headers("return=representation"),
+            json=data,
+            timeout=10,
+        )
+        r.raise_for_status()
+        result = r.json()
+        row = result[0] if isinstance(result, list) and result else {}
+        if row:
+            global _SB_REACHABLE
+            _SB_REACHABLE = True
+        return row
+    except Exception as e:
+        raise
+
+
 def _sb_update(table: str, data: Dict, match: Dict[str, str]) -> Dict:
     if not _sb_ok():
         return {}
@@ -1504,8 +1526,11 @@ async def save_strategy(req: SaveStrategyRequest):
     """
     if not req.user_id:
         raise HTTPException(400, "user_id required")
-    if not _sb_ok():
-        raise HTTPException(503, "Supabase is unreachable. Cannot save strategy.")
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise HTTPException(
+            503,
+            "Supabase not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in backend/.env and restart the server.",
+        )
 
     payload: Dict[str, Any] = {
         "id":           str(uuid.uuid4()),
@@ -1527,7 +1552,7 @@ async def save_strategy(req: SaveStrategyRequest):
     }
 
     try:
-        row = _sb_insert_raise("saved_strategies", payload)
+        row = _sb_insert_try("saved_strategies", payload)
     except Exception as e:
         logging.error("Supabase Insert Failed: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
