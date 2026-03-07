@@ -49,7 +49,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from engine.sandbox import run_strategy_safely
 import routes.broker as broker
+import routes.strategy as strategy_router
 from routes.broker import auto_refresh_sessions
 
 logging.getLogger("yfinance").setLevel(logging.WARNING)
@@ -150,6 +153,12 @@ async def _lifespan(app: FastAPI):
         minutes=2,
         id="strategy_monitor",
     )
+    _broker_scheduler.add_job(
+        _strategy_worker_terminal,
+        trigger="interval",
+        minutes=1,
+        id="strategy_worker",
+    )
     _broker_scheduler.start()
     yield
     if _broker_scheduler:
@@ -201,6 +210,7 @@ app.add_middleware(
 app.middleware("http")(_rate_limit_middleware)
 
 app.include_router(broker.router)
+app.include_router(strategy_router.router)
 
 # ---------------------------------------------------------------------------
 # OpenAI
@@ -1736,6 +1746,108 @@ def _run_strategy_monitor() -> None:
             logging.info("Strategy monitor placed order for user=%s symbol=%s qty=%s", user_id[:8], symbol, qty)
         except Exception as e:  # noqa: BLE001
             logging.warning("Strategy monitor tick failed for deployment %s: %s", dep.get("id"), e)
+
+
+# ---------------------------------------------------------------------------
+# Strategy worker (terminal): run evaluate(data) every 1 min for active terminal strategies
+# Fetches candles (Yahoo), runs run_strategy_safely(); on BUY/SELL triggers paper or live order.
+# ---------------------------------------------------------------------------
+def _strategy_worker_terminal() -> None:
+    """APScheduler job: fetch active terminal strategies, run sandbox evaluate(), execute on BUY/SELL."""
+    if not _sb_ok():
+        return
+    try:
+        rows = _sb_get(
+            "strategies",
+            filters={"status": "eq.active", "mode": "eq.terminal"},
+            limit=100,
+        )
+    except Exception:
+        return
+    if not rows:
+        return
+
+    from routes.broker import get_angel_positions, place_order_impl
+
+    for strat in rows:
+        try:
+            user_id = (strat.get("user_id") or "").strip()
+            symbol = (strat.get("symbol") or "").strip()
+            symboltoken = (strat.get("symboltoken") or "").strip()
+            python_code = (strat.get("python_code") or "").strip()
+            environment = (strat.get("environment") or "paper").strip().lower()
+            strategy_id = strat.get("id")
+
+            if not user_id or not symbol or not python_code:
+                continue
+
+            # Yahoo ticker: strip -EQ, -NSE etc. (e.g. RELIANCE-EQ -> RELIANCE)
+            yahoo_ticker = symbol.replace("-EQ", "").replace("-NSE", "").split("-")[0].strip().upper() or symbol
+            sym = normalise(yahoo_ticker)
+            candles = _yahoo_v8(sym, range_="1d", interval="5m")
+            if not candles or len(candles) < 5:
+                # Fallback: daily bars for testing
+                candles = _yahoo_v8(sym, range_="5d", interval="1d")
+            if not candles or len(candles) < 2:
+                continue
+
+            df = pd.DataFrame(candles)
+            df = df.rename(columns={"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"})
+            if "time" in df.columns:
+                df["date"] = pd.to_datetime(df["time"], unit="s")
+            df = df.dropna(subset=["close"]).tail(100)
+
+            try:
+                signal = run_strategy_safely(python_code, df)
+            except Exception as run_err:  # noqa: BLE001
+                logging.warning("Strategy worker run_strategy_safely failed strategy %s: %s", strategy_id, run_err)
+                continue
+            if signal not in ("BUY", "SELL"):
+                continue
+
+            side = "buy" if signal == "BUY" else "sell"
+            qty = 1  # default; can add quantity column to strategies table later
+            symbol_up = symbol.upper()
+
+            # Trade only when strategy conditions are met AND position state allows (no duplicate BUY, no SELL without position)
+            if environment == "paper":
+                positions = _mem_get_positions(user_id)
+                has_pos = any((p.get("symbol") or "").upper() == symbol_up for p in positions)
+                if signal == "BUY" and has_pos:
+                    continue  # already long — do not double-buy
+                if signal == "SELL" and not has_pos:
+                    continue  # no position — do not sell
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(
+                        _execute_market_order(user_id, symbol_up, qty, side, strategy_id=strategy_id)
+                    )
+                    logging.info("Strategy worker (terminal) paper %s: user=%s symbol=%s qty=%s", side, user_id[:8], symbol, qty)
+                except Exception as e:  # noqa: BLE001
+                    logging.warning("Strategy worker paper order failed: %s", e)
+            else:
+                positions = get_angel_positions(user_id, "angelone")
+                tradingsymbol_like = symbol_up.replace(".NS", "").replace(" ", "")
+                has_open = any(
+                    (tradingsymbol_like in ((p.get("tradingsymbol") or p.get("symbol") or "").upper().replace(" ", ""))
+                     and int(p.get("netqty") or p.get("quantity") or 0) != 0)
+                    for p in positions
+                )
+                if signal == "BUY" and has_open:
+                    continue  # already long — do not double-buy
+                if signal == "SELL" and not has_open:
+                    continue  # no position — do not sell
+                try:
+                    place_order_impl(
+                        user_id, "angelone", symbol, qty,
+                        "BUY" if signal == "BUY" else "SELL", "MARKET",
+                        angel_symbol=symbol, token=symboltoken, exchange="NSE",
+                    )
+                    logging.info("Strategy worker (terminal) live %s: user=%s symbol=%s qty=%s", side, user_id[:8], symbol, qty)
+                except Exception as e:  # noqa: BLE001
+                    logging.warning("Strategy worker live order failed: %s", e)
+        except Exception as e:  # noqa: BLE001
+            logging.warning("Strategy worker tick failed for strategy %s: %s", strat.get("id"), e)
 
 
 # ---------------------------------------------------------------------------
