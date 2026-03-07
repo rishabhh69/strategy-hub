@@ -254,11 +254,28 @@ export default function LiveTerminal() {
     });
   }, []);
 
-  // ── 2. Load strategies ───────────────────────────────────────────────────────
+  // ── 2. Load strategies (from backend API = saved_strategies; name→title, code→logic_text) ─
   useEffect(() => {
-    supabase.from("strategies").select("id, title, logic_text")
-      .order("created_at", { ascending: false }).limit(20)
-      .then(({ data, error }) => { if (!error && data) setStrategies(data as Strategy[]); });
+    let cancelled = false;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id || cancelled) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/strategies/mine?user_id=${encodeURIComponent(user.id)}&limit=20`);
+        if (!res.ok || cancelled) return;
+        const rows = await res.json();
+        if (cancelled) return;
+        const list: Strategy[] = (rows || []).map((r: { id: string; name?: string; code?: string }) => ({
+          id: r.id,
+          title: r.name ?? "",
+          logic_text: r.code ?? "",
+        }));
+        setStrategies(list);
+      } catch {
+        if (!cancelled) setStrategies([]);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // ── 2b. Strategy passed from Strategy Studio (no Supabase save) ───────────────

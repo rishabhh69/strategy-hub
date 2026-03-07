@@ -1079,6 +1079,25 @@ def _sb_insert(table: str, data: Dict) -> Dict:
         return {}
 
 
+def _sb_insert_raise(table: str, data: Dict) -> Dict:
+    """Like _sb_insert but re-raises on failure so callers can log and return 500 with exact error."""
+    if not _sb_ok():
+        raise RuntimeError("Supabase is unreachable (no URL/key or previously marked down).")
+    try:
+        r = _YF_SESSION.post(
+            f"{SUPABASE_URL}/rest/v1/{table}",
+            headers=_sb_headers("return=representation"),
+            json=data,
+            timeout=10,
+        )
+        r.raise_for_status()
+        result = r.json()
+        return result[0] if isinstance(result, list) and result else {}
+    except Exception as e:
+        _sb_mark_down(e)
+        raise
+
+
 def _sb_update(table: str, data: Dict, match: Dict[str, str]) -> Dict:
     if not _sb_ok():
         return {}
@@ -1459,6 +1478,13 @@ async def get_paper_account(user_id: str = Query(..., min_length=1, max_length=1
 # ---------------------------------------------------------------------------
 # Saved Strategies API (Supabase persistence only; does not touch engine)
 # ---------------------------------------------------------------------------
+# Supabase table: saved_strategies
+# Required columns (from SaveStrategyRequest): id (uuid/text), user_id (text), name (text),
+# description (text, nullable), code (text), ticker (text), cagr (float8, nullable),
+# total_return (float8, nullable), max_drawdown (float8, nullable), volatility (float8, nullable),
+# sharpe_ratio (float8, nullable), sortino_ratio (float8, nullable), win_rate (float8, nullable),
+# total_trades (int4, nullable), equity_curve (jsonb, nullable). Optional: created_at (timestamptz default now()).
+# ---------------------------------------------------------------------------
 
 @app.post("/api/strategies/save")
 async def save_strategy(req: SaveStrategyRequest):
@@ -1490,9 +1516,13 @@ async def save_strategy(req: SaveStrategyRequest):
         "equity_curve": [pt.model_dump() for pt in (req.equity_curve or [])] or None,
     }
 
-    row = _sb_insert("saved_strategies", payload)
+    try:
+        row = _sb_insert_raise("saved_strategies", payload)
+    except Exception as e:
+        logging.error("Supabase Insert Failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     if not row:
-        raise HTTPException(503, "Failed to save strategy to Supabase.")
+        raise HTTPException(500, "Supabase returned no row after insert.")
     return {"id": row.get("id"), "saved_strategy": row}
 
 
@@ -2393,12 +2423,12 @@ async def deploy_bot(req: DeployBotRequest):
         pass
     elif strategy_id and strategy_id != "inline":
         if _sb_ok():
-            rows = _sb_get("strategies", {"id": f"eq.{strategy_id}"})
+            rows = _sb_get("saved_strategies", {"id": f"eq.{strategy_id}"})
             if not rows:
                 raise HTTPException(404, f"Strategy '{strategy_id}' not found in Supabase.")
             row = rows[0]
-            strategy_code  = row.get("logic_text", "") or ""
-            strategy_title = row.get("title", req.title or strategy_id) or strategy_title
+            strategy_code  = row.get("code", "") or row.get("logic_text", "") or ""
+            strategy_title = row.get("name", "") or row.get("title", req.title or strategy_id) or strategy_title
         else:
             raise HTTPException(503, "Supabase is unreachable. Cannot fetch strategy code.")
     else:
