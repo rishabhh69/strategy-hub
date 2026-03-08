@@ -1712,9 +1712,8 @@ def _run_strategy_monitor() -> None:
     Background job: find all Live angelone deployments, fetch live data, evaluate strategy logic.
     Places a broker order only when (1) strategy conditions are met (last bar signal/position == buy)
     and (2) no open position for that symbol. Otherwise no order is placed.
+    Tries to fetch deployments even when marked down so we recover after Supabase is back.
     """
-    if not _sb_ok():
-        return
     try:
         deployments = _sb_get(
             "strategy_deployments",
