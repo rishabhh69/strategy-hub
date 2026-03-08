@@ -1,7 +1,7 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Zap, Shield, ArrowRight } from "lucide-react";
+import { Sparkles, Zap, Shield, ArrowRight, Terminal, LineChart, Store } from "lucide-react";
 import { TickerTape } from "@/components/layout/TickerTape";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -285,6 +285,60 @@ export default function LandingPage() {
               title="Deploy Concurrently"
               description="One click routes real-time signals to dozens of connected broker APIs simultaneously."
             />
+          </div>
+        </div>
+      </section>
+
+      {/* Retail & Marketplace — Dual-Sided Marketplace */}
+      <section className="relative border-t border-border/60 bg-[#0a0f1a] py-24">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
+              The Tradeky Marketplace: Alpha for Everyone.
+            </h2>
+            <p className="text-muted-foreground max-w-2xl mx-auto">
+              Whether you are building your own edge or following verified experts, Tradeky brings institutional-grade execution to the independent trader.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-6">
+            <div className="group relative overflow-hidden rounded-2xl bg-card/50 backdrop-blur border border-border p-6 transition-all duration-300 hover:-translate-y-2 hover:border-blue-500/50 hover:shadow-[0_0_30px_rgba(59,130,246,0.15)]">
+              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
+                <Terminal className="w-6 h-6 text-primary" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground mb-2">Code-Free Strategy Builder</h3>
+              <p className="text-muted-foreground text-sm">
+                Use our NLP engine to type your strategy in plain English. We instantly generate the Python, backtest it, and deploy it to your personal broker.
+              </p>
+            </div>
+
+            <div className="group relative overflow-hidden rounded-2xl bg-card/50 backdrop-blur border border-border p-6 transition-all duration-300 hover:-translate-y-2 hover:border-blue-500/50 hover:shadow-[0_0_30px_rgba(59,130,246,0.15)]">
+              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
+                <LineChart className="w-6 h-6 text-primary" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground mb-2">Pro-Grade Execution</h3>
+              <p className="text-muted-foreground text-sm">
+                Monitor live charts and execute simulated paper-trades on our Live Terminal before risking real capital on the open market.
+              </p>
+            </div>
+
+            <div className="group relative overflow-hidden rounded-2xl bg-card/50 backdrop-blur border border-border p-6 transition-all duration-300 hover:-translate-y-2 hover:border-blue-500/50 hover:shadow-[0_0_30px_rgba(59,130,246,0.15)]">
+              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
+                <Store className="w-6 h-6 text-primary" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground mb-2">Subscribe to Verified RIAs</h3>
+              <p className="text-muted-foreground text-sm">
+                Don&apos;t want to build? Browse the Tradeky Marketplace to subscribe to regulatory-compliant strategies built by top-tier wealth managers, executed automatically on your account.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-12 flex justify-center">
+            <Link to="/marketplace">
+              <Button variant="ghost" size="lg" className="border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 hover:border-blue-500/50 hover:shadow-[0_0_20px_rgba(59,130,246,0.2)] transition-all duration-300">
+                Explore the Marketplace →
+              </Button>
+            </Link>
           </div>
         </div>
       </section>
