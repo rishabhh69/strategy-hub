@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   User, Bell, Shield, CreditCard, LogOut,
-  CheckCircle2, XCircle, Loader2, Lock, Clock,
+  CheckCircle2, XCircle, Loader2, Lock, Clock, PlugZap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,6 +52,13 @@ export default function Settings() {
     "idle" | "checking" | "available" | "taken" | "invalid"
   >("idle");
   const [usernameHint, setUsernameHint] = useState("");
+
+  // Broker connection (Angel One) — so any user can connect and execute from Strategy Studio
+  const [brokerConnected, setBrokerConnected] = useState<{ broker: string; client_id: string | null } | null>(null);
+  const [brokerClientId, setBrokerClientId] = useState("");
+  const [brokerPin, setBrokerPin] = useState("");
+  const [brokerTotpSecret, setBrokerTotpSecret] = useState("");
+  const [brokerLinking, setBrokerLinking] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate    = useNavigate();
@@ -142,6 +149,25 @@ export default function Settings() {
 
       setUsernameChangedAt(resolvedChangedAt);
       setCooldownLeft(daysLeft);
+
+      // Broker connection status (Angel One)
+      try {
+        const { data: brokerData } = await supabase
+          .from("broker_credentials")
+          .select("broker_name, client_id")
+          .eq("user_id", user.id)
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
+        if (brokerData) {
+          setBrokerConnected({
+            broker: (brokerData as { broker_name?: string }).broker_name || "angelone",
+            client_id: (brokerData as { client_id?: string | null }).client_id ?? null,
+          });
+        }
+      } catch {
+        // ignore
+      }
 
       setLoading(false);
     };
@@ -352,6 +378,56 @@ export default function Settings() {
     setSaving(false);
   };
 
+  // ── Broker connection ───────────────────────────────────────────────────
+  const handleConnectBroker = async () => {
+    if (!userId) {
+      toast.error("Not authenticated");
+      return;
+    }
+    const cid = brokerClientId.trim();
+    const pin = brokerPin.trim();
+    const totp = brokerTotpSecret.trim();
+    if (!cid) {
+      toast.error("Enter your Angel One client ID.");
+      return;
+    }
+    if (!pin) {
+      toast.error("Enter your Angel One PIN.");
+      return;
+    }
+    if (!totp) {
+      toast.error("Enter your Angel One TOTP secret (from 2FA setup).");
+      return;
+    }
+    setBrokerLinking(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/broker/angelone/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: userId,
+          client_id: cid,
+          password: pin,
+          totp_secret: totp,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = typeof data.detail === "string" ? data.detail : "Broker connection failed.";
+        throw new Error(msg);
+      }
+      toast.success("Broker connected. You can execute strategies from Strategy Studio.");
+      setBrokerConnected({ broker: "angelone", client_id: cid });
+      setBrokerClientId("");
+      setBrokerPin("");
+      setBrokerTotpSecret("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to connect broker.");
+    } finally {
+      setBrokerLinking(false);
+    }
+  };
+
   // ── Sign out ──────────────────────────────────────────────────────────────
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -487,6 +563,76 @@ export default function Settings() {
                 {saving ? "Saving…" : "Save Changes"}
               </Button>
             </div>
+          </div>
+
+          {/* ── Broker connection (Angel One) ─────────────────────────────────── */}
+          <div className="p-6 rounded-xl bg-card border border-border">
+            <div className="flex items-center gap-3 mb-4">
+              <PlugZap className="w-5 h-5 text-primary" />
+              <h2 className="font-medium text-foreground">Broker Connection</h2>
+            </div>
+            <p className="text-xs text-muted-foreground mb-4">
+              Connect your Angel One account to execute strategies from Strategy Studio directly to your broker.
+            </p>
+            {brokerConnected ? (
+              <div className="p-4 rounded-lg bg-primary/5 border border-primary/20">
+                <p className="text-sm font-medium text-foreground flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-profit" />
+                  Connected to Angel One{brokerConnected.client_id ? ` (${brokerConnected.client_id})` : ""}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Deploy a strategy in Strategy Studio and choose &quot;Live Execution&quot; to place orders to this account.
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-4">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="broker_client_id">Angel One Client ID</Label>
+                  <Input
+                    id="broker_client_id"
+                    value={brokerClientId}
+                    onChange={(e) => setBrokerClientId(e.target.value)}
+                    placeholder="e.g. D1234567"
+                    className="bg-background border-border"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="broker_pin">PIN</Label>
+                  <Input
+                    id="broker_pin"
+                    type="password"
+                    value={brokerPin}
+                    onChange={(e) => setBrokerPin(e.target.value)}
+                    placeholder="Your Angel One PIN"
+                    className="bg-background border-border"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="broker_totp">TOTP Secret</Label>
+                  <Input
+                    id="broker_totp"
+                    type="password"
+                    value={brokerTotpSecret}
+                    onChange={(e) => setBrokerTotpSecret(e.target.value)}
+                    placeholder="From Angel One 2FA setup"
+                    className="bg-background border-border"
+                    autoComplete="off"
+                  />
+                </div>
+                <Button onClick={handleConnectBroker} disabled={brokerLinking}>
+                  {brokerLinking ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Connecting…
+                    </>
+                  ) : (
+                    "Connect Angel One"
+                  )}
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* ── Notifications ─────────────────────────────────────────────────── */}

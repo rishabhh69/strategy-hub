@@ -1010,7 +1010,7 @@ async def execute_trade(request: TradeRequest):
 # Supabase REST helpers  (service_role key — trusted server-side access)
 # ---------------------------------------------------------------------------
 SUPABASE_URL              = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
     print("WARNING: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set — paper trading will not persist data.")
@@ -1525,13 +1525,15 @@ async def save_strategy(req: SaveStrategyRequest):
     """
     Save a successful backtest into the user's private library.
     This only persists data to Supabase and does NOT execute any code.
+    Uses SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) from backend/.env.
     """
     if not req.user_id:
         raise HTTPException(400, "user_id required")
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    supabase_key = SUPABASE_SERVICE_ROLE_KEY or os.getenv("SUPABASE_KEY", "")
+    if not SUPABASE_URL or not supabase_key:
         raise HTTPException(
             503,
-            "Supabase not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in backend/.env and restart the server.",
+            "Supabase not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) in backend/.env and restart the server.",
         )
 
     payload: Dict[str, Any] = {
@@ -1556,8 +1558,16 @@ async def save_strategy(req: SaveStrategyRequest):
     try:
         row = _sb_insert_try("saved_strategies", payload)
     except Exception as e:
-        logging.error("Supabase Insert Failed: %s", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.exception("Supabase insert failed for saved_strategies")
+        detail = str(e)
+        if getattr(e, "response", None) is not None:
+            try:
+                body = getattr(e.response, "text", None) or ""
+                if body:
+                    detail = f"{detail}; response: {body[:500]}"
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=detail)
     if not row:
         raise HTTPException(500, "Supabase returned no row after insert.")
     return {"id": row.get("id"), "saved_strategy": row}

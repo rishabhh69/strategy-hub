@@ -164,6 +164,7 @@ export function DeploymentModal({
                         ))}
                       </SelectContent>
                     </Select>
+                    <p className="text-xs text-muted-foreground/80">Target: All Active Client Accounts</p>
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs text-muted-foreground">

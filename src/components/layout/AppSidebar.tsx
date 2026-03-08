@@ -6,6 +6,8 @@ import {
   Monitor,
   Bookmark,
   PlugZap,
+  Store,
+  Users,
 } from "lucide-react";
 import { NavLink, Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -29,18 +31,18 @@ const navItems = [
     path: "/client-accounts",
     description: "RIA client CRM"
   },
-  // { 
-  //   title: "Marketplace", 
-  //   icon: Store, 
-  //   path: "/marketplace",
-  //   description: "Browse strategies"
-  // },
-  // { 
-  //   title: "Community", 
-  //   icon: Users, 
-  //   path: "/community",
-  //   description: "Discussion"
-  // },
+  { 
+    title: "Marketplace", 
+    icon: Store, 
+    path: "/marketplace",
+    description: "Browse strategies"
+  },
+  { 
+    title: "Community", 
+    icon: Users, 
+    path: "/community",
+    description: "Discussion"
+  },
   { 
     title: "Live Terminal", 
     icon: Monitor, 

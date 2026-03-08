@@ -19,10 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 class AngelOneLoginPayload(BaseModel):
-  # For non-admin users we accept client_id/password from the request.
-  # For admin / fully server-side flows, these may be omitted and taken from env.
+  # For normal users: send client_id, password, totp_secret to connect their own broker.
+  # For admin / server-side: omit and use env ANGEL_CLIENT_ID, ANGEL_PASSWORD, ANGEL_TOTP_SECRET.
   client_id: str | None = Field(default=None, min_length=1, max_length=128)
   password: str | None = Field(default=None, min_length=1)
+  totp_secret: str | None = Field(default=None, min_length=1, max_length=128)
   user_id: str = Field(..., min_length=1, max_length=128)
 
 
@@ -42,13 +43,14 @@ async def angelone_login(payload: AngelOneLoginPayload) -> Dict[str, Any]:
   # Resolve credentials: prefer request payload, fall back to backend .env defaults.
   client_id = (payload.client_id or os.getenv("ANGEL_CLIENT_ID") or "").strip()
   password = (payload.password or os.getenv("ANGEL_PASSWORD") or "").strip()
+  totp_secret = (payload.totp_secret or os.getenv("ANGEL_TOTP_SECRET") or "").strip()
   if not client_id or not password:
     raise HTTPException(400, "Angel One client_id/password not provided and no backend defaults configured.")
-
-  # Always generate TOTP internally using backend secret to avoid asking user for 6-digit code.
-  totp_secret = os.getenv("ANGEL_TOTP_SECRET")
   if not totp_secret:
-    raise HTTPException(500, "ANGEL_TOTP_SECRET not configured on server.")
+    raise HTTPException(
+      400,
+      "TOTP secret required. Provide it in the request (Settings → Connect broker) or set ANGEL_TOTP_SECRET on server.",
+    )
   try:
     # Ensure we pass a 6-digit TOTP string to SmartConnect
     totp_pin = str(pyotp.TOTP(totp_secret).now()).strip()
@@ -430,6 +432,7 @@ async def place_order(payload: PlaceOrderPayload) -> Dict[str, Any]:
 
 class PlaceBulkOrderPayload(BaseModel):
   ria_user_id: str = Field(..., min_length=1, max_length=128)
+  strategy_name: Optional[str] = Field(default=None, max_length=256)
   tradingsymbol: str = Field(..., min_length=1, max_length=64)
   symboltoken: str = Field(..., min_length=1, max_length=32)
   transaction_type: str = Field(..., pattern="^(BUY|SELL)$")
@@ -437,7 +440,42 @@ class PlaceBulkOrderPayload(BaseModel):
   price: Optional[float] = Field(default=None, ge=0)
   exchange: str = Field(default="NSE", max_length=8)
   # Reference price (e.g. LTP) used to compute quantity from capital_allocation: qty = capital / reference_price
-  reference_price: float = Field(..., gt=0, description="Current price for qty calculation (e.g. LTP)")
+  reference_price: float = Field(default=1.0, gt=0, description="Current price for qty calculation (e.g. LTP)")
+
+
+async def execute_client_order(
+  client_data: Dict[str, Any],
+  order_details: Dict[str, Any],
+  reference_price: float,
+) -> Dict[str, Any]:
+  """
+  Async helper: decrypt pin/totp, generate TOTP, then run SmartConnect + placeOrder in a thread.
+  client_data = one row from client_accounts (with encrypted_pin, encrypted_totp_secret, capital_allocation, etc).
+  """
+  try:
+    pin = decrypt_secret(client_data.get("encrypted_pin") or "")
+    totp_secret = decrypt_secret(client_data.get("encrypted_totp_secret") or "")
+  except Exception as e:  # noqa: BLE001
+    logger.warning("execute_client_order: decrypt failed for client %s: %s", client_data.get("client_id"), e)
+    return {
+      "client_id": client_data.get("client_id"),
+      "client_name": client_data.get("client_name"),
+      "success": False,
+      "error": "Decryption failed",
+    }
+  totp_pin = str(pyotp.TOTP(totp_secret).now()).strip()
+  capital = float(client_data.get("capital_allocation") or 0)
+  if capital <= 0:
+    capital = 1.0
+  quantity = max(1, int(capital / reference_price))
+  client_exec = {
+    "client_id": (client_data.get("client_id") or "").strip(),
+    "client_name": (client_data.get("client_name") or "").strip(),
+    "pin": pin,
+    "totp_pin": totp_pin,
+    "quantity": quantity,
+  }
+  return await asyncio.to_thread(_execute_single_client_order_sync, client_exec, order_details)
 
 
 def _execute_single_client_order_sync(
@@ -576,40 +614,8 @@ async def place_bulk_order_impl(
     "price": price,
   }
 
-  client_executions: List[Dict[str, Any]] = []
-  for row in rows:
-    try:
-      pin = decrypt_secret(row.get("encrypted_pin") or "")
-      totp_secret = decrypt_secret(row.get("encrypted_totp_secret") or "")
-    except Exception as e:  # noqa: BLE001
-      logger.warning("place_bulk_order_impl: decrypt failed for client %s: %s", row.get("client_id"), e)
-      client_executions.append({
-        "client_id": row.get("client_id"),
-        "client_name": row.get("client_name"),
-        "success": False,
-        "error": "Decryption failed",
-      })
-      continue
-    totp_pin = str(pyotp.TOTP(totp_secret).now()).strip()
-    capital = float(row.get("capital_allocation") or 0)
-    if capital <= 0:
-      capital = 1.0
-    quantity = max(1, int(capital / reference_price))
-    client_executions.append({
-      "client_id": (row.get("client_id") or "").strip(),
-      "client_name": (row.get("client_name") or "").strip(),
-      "pin": pin,
-      "totp_pin": totp_pin,
-      "capital_allocation": capital,
-      "quantity": quantity,
-    })
-
-  async def run_one(ce: Dict[str, Any]) -> Dict[str, Any]:
-    if ce.get("success") is False:
-      return ce
-    return await asyncio.to_thread(_execute_single_client_order_sync, ce, order_details)
-
-  results = await asyncio.gather(*[run_one(ce) for ce in client_executions], return_exceptions=True)
+  tasks = [execute_client_order(row, order_details, reference_price) for row in rows]
+  results = await asyncio.gather(*tasks, return_exceptions=True)
 
   successful = [{"client_id": r.get("client_id"), "client_name": r.get("client_name"), "orderid": r.get("orderid")} for r in results if isinstance(r, dict) and r.get("success")]
   failed: List[Dict[str, Any]] = []
@@ -621,7 +627,7 @@ async def place_bulk_order_impl(
 
   return {
     "ok": True,
-    "total": len(client_executions),
+    "total": len(rows),
     "success_count": len(successful),
     "failed_count": len(failed),
     "successful": successful,

@@ -98,8 +98,9 @@ export default function StrategyStudio() {
           return;
         }
         const [brokerRes, clientsRes] = await Promise.all([
-          supabase
-            .from("broker_credentials")
+          // broker_credentials table exists for broker link; may be missing from generated Supabase types
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (supabase as any).from("broker_credentials")
             .select("broker_name, client_id")
             .eq("user_id", user.id)
             .eq("is_active", true),
@@ -188,7 +189,7 @@ export default function StrategyStudio() {
       }
       
       const data: BacktestResult = await response.json();
-      const raw = data.metrics ?? {};
+      const raw = (data.metrics ?? {}) as BacktestResult["metrics"] & Record<string, unknown>;
       const num = (x: unknown) => (typeof x === "number" && !Number.isNaN(x) ? x : Number(x));
       const cagr = num(raw.cagr) || 0;
       const drawdown = num(raw.drawdown) || 0;
@@ -713,29 +714,59 @@ Examples:
               return;
             }
             setLiveDeploying(true);
+            const refPrice = 100;
+            const qty = Math.max(1, Math.floor(capitalNum / refPrice));
             try {
-              const res = await fetch(`${API_BASE}/api/broker/place-bulk-order`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  ria_user_id: user.id,
-                  tradingsymbol: selectedInstrument.angelSymbol,
-                  symboltoken: selectedInstrument.token,
-                  transaction_type: "BUY",
-                  order_type: "MARKET",
-                  reference_price: 100,
-                }),
-              });
-              const data = await res.json().catch(() => ({}));
-              if (!res.ok) {
-                const msg = typeof data.detail === "string" ? data.detail : "Bulk order request failed.";
-                throw new Error(msg);
+              // RIA with active client accounts → bulk order to all clients
+              if (hasActiveClients) {
+                const res = await fetch(`${API_BASE}/api/broker/place-bulk-order`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    ria_user_id: user.id,
+                    strategy_name: strategyInput.trim().slice(0, 200) || "Backtest strategy",
+                    tradingsymbol: selectedInstrument.angelSymbol,
+                    symboltoken: selectedInstrument.token,
+                    transaction_type: "BUY",
+                    order_type: "MARKET",
+                    reference_price: refPrice,
+                  }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                  const msg = typeof data.detail === "string" ? data.detail : "Bulk order request failed.";
+                  throw new Error(msg);
+                }
+                const count = typeof data.success_count === "number" ? data.success_count : 0;
+                toast.success(`Deployed: Orders routed to ${count} client${count !== 1 ? "s" : ""}.`);
+                setDeploymentOpen(false);
+              } else {
+                // Normal user with connected broker → single order to their own account
+                const res = await fetch(`${API_BASE}/api/broker/place-order`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    user_id: user.id,
+                    broker_name: "angelone",
+                    symbol: selectedInstrument.value,
+                    qty,
+                    transaction_type: "BUY",
+                    order_type: "MARKET",
+                    angel_symbol: selectedInstrument.angelSymbol,
+                    token: selectedInstrument.token,
+                  }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                  const msg = typeof data.detail === "string" ? data.detail : "Order failed.";
+                  throw new Error(msg);
+                }
+                toast.success("Deployed: Order sent to your broker.");
+                setDeploymentOpen(false);
               }
-              toast.success("Strategy deployed: Bulk orders routed to active client accounts.");
-              setDeploymentOpen(false);
             } catch (err) {
               console.error(err);
-              toast.error("Failed to route orders. Check client connections.");
+              toast.error("Failed to route orders. Check broker connection in Settings.");
             } finally {
               setLiveDeploying(false);
             }
