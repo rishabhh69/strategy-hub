@@ -1043,6 +1043,13 @@ def _sb_headers(prefer: str = "") -> Dict[str, str]:
     return h
 
 
+def _sb_mark_up() -> None:
+    """Mark Supabase as reachable again after a successful request (recover from transient failure)."""
+    global _SB_REACHABLE
+    if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+        _SB_REACHABLE = True
+
+
 def _sb_get(
     table:   str,
     filters: Optional[Dict[str, str]] = None,
@@ -1050,7 +1057,7 @@ def _sb_get(
     order:   Optional[str] = None,
     limit:   Optional[int] = None,
 ) -> List[Dict]:
-    if not _sb_ok():
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         return []
     params: Dict[str, Any] = {"select": select}
     if filters:
@@ -1067,6 +1074,7 @@ def _sb_get(
             timeout=10,
         )
         r.raise_for_status()
+        _sb_mark_up()
         return r.json()
     except Exception as e:
         _sb_mark_down(e)
@@ -1122,11 +1130,9 @@ def _sb_insert_try(table: str, data: Dict) -> Dict:
             timeout=10,
         )
         r.raise_for_status()
+        _sb_mark_up()
         result = r.json()
         row = result[0] if isinstance(result, list) and result else {}
-        if row:
-            global _SB_REACHABLE
-            _SB_REACHABLE = True
         return row
     except Exception as e:
         raise
@@ -1580,11 +1586,10 @@ async def list_saved_strategies(
 ):
     """
     Return all saved strategies for the given user_id, newest first.
+    Always attempts the request so we recover from transient Supabase failures.
     """
     if not user_id:
         raise HTTPException(400, "user_id required")
-    if not _sb_ok():
-        return []
 
     rows = _sb_get(
         "saved_strategies",

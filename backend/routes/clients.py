@@ -21,7 +21,7 @@ MASKED = "****"
 
 class AddClientRequest(BaseModel):
     """Payload for POST /api/clients/add."""
-    user_id: str = Field(..., min_length=1, max_length=128, description="RIA's user_id (auth.uid())")
+    ria_user_id: str = Field(..., min_length=1, max_length=128, description="RIA's user_id (auth.uid())")
     client_name: str = Field(..., min_length=1, max_length=256)
     capital_allocation: float = Field(..., ge=0)
     broker: str = Field(..., min_length=1, max_length=64)
@@ -52,7 +52,7 @@ async def add_client(req: AddClientRequest) -> Dict[str, Any]:
 
     row = {
         "id": str(uuid.uuid4()),
-        "ria_user_id": req.user_id,
+        "ria_user_id": req.ria_user_id.strip(),
         "client_name": req.client_name.strip(),
         "capital_allocation": req.capital_allocation,
         "broker": req.broker.strip().lower(),
@@ -78,11 +78,16 @@ async def add_client(req: AddClientRequest) -> Dict[str, Any]:
 
 @router.get("/list")
 async def list_clients(
-    user_id: str = Query(..., min_length=1, max_length=128, description="RIA's user_id"),
+    ria_user_id: str | None = Query(None, min_length=1, max_length=128),
+    user_id: str | None = Query(None, min_length=1, max_length=128),
 ) -> List[Dict[str, Any]]:
     """
     List all client accounts for the RIA. Encrypted PIN and TOTP are never returned; masked as ****.
+    Pass ria_user_id= or user_id= (RIA's auth user id).
     """
+    uid = (ria_user_id or user_id or "").strip()
+    if not uid:
+        raise HTTPException(400, "ria_user_id or user_id required")
     try:
         supabase = get_supabase()
     except RuntimeError:
@@ -91,7 +96,7 @@ async def list_clients(
     try:
         result = supabase.table("client_accounts").select(
             "id, ria_user_id, client_name, capital_allocation, broker, client_id, status, created_at"
-        ).eq("ria_user_id", user_id).order("created_at", desc=True).execute()
+        ).eq("ria_user_id", uid).order("created_at", desc=True).execute()
         rows = result.data or []
     except Exception as e:
         logger.error("client_accounts list failed: %s", e)

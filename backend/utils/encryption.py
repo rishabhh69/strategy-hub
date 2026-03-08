@@ -1,20 +1,34 @@
 """
 Fernet (AES-128-CBC + HMAC) encryption for broker secrets at rest.
 Reads base64 Fernet key from ENCRYPTION_KEY env var. Never log or return plain-text secrets.
+Fallback dummy key only for local testing when ENCRYPTION_KEY is missing (with loud warning).
 """
 
 import os
+import sys
 
 from cryptography.fernet import Fernet, InvalidToken
+
+# Fixed dummy key for local testing only when ENCRYPTION_KEY is not set (DO NOT use in production)
+_DUMMY_KEY_B64 = "dGVzdF9rZXlfbG9jYWxfb25seV8zMmJ5dGVzX2hlcmU="  # valid 32-byte base64 for Fernet
 
 
 def _get_fernet() -> Fernet:
     key_b64 = (os.getenv("ENCRYPTION_KEY") or "").strip()
     if not key_b64:
-        raise RuntimeError(
-            "ENCRYPTION_KEY is not set. Generate a key with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\" "
-            "and set it in backend/.env"
+        print(
+            "\n" + "!" * 70 + "\n"
+            "WARNING: ENCRYPTION_KEY is not set. Using a fallback dummy key for local testing only.\n"
+            "Secrets are NOT secure. Set ENCRYPTION_KEY in backend/.env for production.\n"
+            "Generate: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"\n"
+            "!" * 70 + "\n",
+            file=sys.stderr,
+            flush=True,
         )
+        try:
+            return Fernet(_DUMMY_KEY_B64.encode())
+        except Exception:
+            return Fernet(Fernet.generate_key())
     try:
         return Fernet(key_b64.encode() if isinstance(key_b64, str) else key_b64)
     except Exception as e:

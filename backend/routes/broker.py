@@ -624,6 +624,12 @@ async def place_bulk_order_impl(
       failed.append({"success": False, "error": str(r)})
     elif isinstance(r, dict) and not r.get("success"):
       failed.append({"client_id": r.get("client_id"), "client_name": r.get("client_name"), "error": r.get("error", "Unknown error")})
+  details: List[Dict[str, Any]] = []
+  for r in results:
+    if isinstance(r, dict):
+      details.append({"client_id": r.get("client_id"), "client_name": r.get("client_name"), "success": r.get("success"), "orderid": r.get("orderid"), "error": r.get("error")})
+    else:
+      details.append({"success": False, "error": str(r)})
 
   return {
     "ok": True,
@@ -632,6 +638,7 @@ async def place_bulk_order_impl(
     "failed_count": len(failed),
     "successful": successful,
     "failed": failed,
+    "details": details,
   }
 
 

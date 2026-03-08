@@ -10,13 +10,17 @@ export default function Integrations() {
       <div className="p-4 md:p-6 max-w-7xl w-full mx-auto h-full overflow-auto space-y-6">
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-          <div>
+          <div className="space-y-1">
             <p className="text-sm font-medium text-foreground">
-              Configure firm-wide integrations. To manage individual investor credentials, visit the{" "}
+              Configure firm-wide integrations. To manage individual investor credentials, visit{" "}
               <Link to="/client-accounts" className="text-primary underline hover:no-underline">
                 Client Accounts
-              </Link>{" "}
-              tab.
+              </Link>
+              . To connect your own broker for executing strategies in Strategy Studio, go to{" "}
+              <Link to="/settings" className="text-primary underline hover:no-underline">
+                Settings → Broker Connection
+              </Link>
+              .
             </p>
           </div>
         </div>

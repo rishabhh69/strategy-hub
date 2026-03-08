@@ -74,8 +74,7 @@ export function DeploymentModal({
         </DialogHeader>
         <div className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Choose how you want to deploy this strategy. You can start with paper trading, or route live
-            orders to connected broker accounts.
+            Choose how you want to deploy. Orders are executed strictly when your strategy conditions are met (e.g. signal from your backtest logic).
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -93,7 +92,7 @@ export function DeploymentModal({
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                Deploy to the simulated Live Terminal. Ideal for testing new ideas without real capital.
+                Run your strategy in the Live Terminal (simulated). Trades fire only when your strategy conditions are met.
               </p>
             </button>
 
@@ -111,7 +110,7 @@ export function DeploymentModal({
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                Route real orders to connected broker accounts with per-client capital allocation.
+                Deploy to your broker. Real orders are placed only when your strategy conditions are met (monitored on the server).
               </p>
             </button>
           </div>

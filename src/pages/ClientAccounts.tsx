@@ -123,7 +123,7 @@ export default function ClientAccounts() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_id: userId,
+          ria_user_id: userId,
           client_name: name,
           capital_allocation: cap,
           broker: broker,

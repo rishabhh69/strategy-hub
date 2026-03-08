@@ -384,7 +384,9 @@ export default function StrategyStudio() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border-b border-border">
           <div>
             <h1 className="text-xl font-semibold text-foreground">Strategy Studio</h1>
-            <p className="text-sm text-muted-foreground">Build and backtest trading strategies</p>
+            <p className="text-sm text-muted-foreground">
+              Build and backtest trading strategies. Backtest runs your strategy&apos;s Python code on historical data; deploy to Live Terminal (paper) or your broker — orders execute only when strategy conditions are met.
+            </p>
           </div>
           
           <div className="flex items-center gap-3">
@@ -413,6 +415,7 @@ export default function StrategyStudio() {
               onClick={handleRunBacktest}
               disabled={!strategyInput.trim() || isRunning}
               className="btn-glow bg-gradient-to-r from-primary to-accent font-medium"
+              title="Test your strategy's Python code on historical data"
             >
               <Play className="w-4 h-4 mr-2" />
               {isRunning ? "Running..." : "Run Backtest"}
@@ -422,8 +425,8 @@ export default function StrategyStudio() {
                 <Button
                   variant="outline"
                   onClick={async () => {
-                    const ok = await autoSaveForDeployment();
-                    if (ok) setDeploymentOpen(true);
+                    setDeploymentOpen(true);
+                    autoSaveForDeployment().catch(() => {});
                   }}
                   className="border-primary/50 text-primary hover:bg-primary/10"
                 >
@@ -435,7 +438,12 @@ export default function StrategyStudio() {
                     type="button"
                     variant="outline"
                     className="border-border text-foreground hover:bg-muted/40"
-                    onClick={() => setSaveDialogOpen(true)}
+                    onClick={() => {
+                      if (!saveName.trim() && strategyInput.trim()) {
+                        setSaveName(strategyInput.trim().slice(0, 80).split("\n")[0] || "My strategy");
+                      }
+                      setSaveDialogOpen(true);
+                    }}
                   >
                     Save Strategy
                   </Button>
@@ -714,59 +722,32 @@ Examples:
               return;
             }
             setLiveDeploying(true);
-            const refPrice = 100;
-            const qty = Math.max(1, Math.floor(capitalNum / refPrice));
             try {
-              // RIA with active client accounts → bulk order to all clients
-              if (hasActiveClients) {
-                const res = await fetch(`${API_BASE}/api/broker/place-bulk-order`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    ria_user_id: user.id,
-                    strategy_name: strategyInput.trim().slice(0, 200) || "Backtest strategy",
-                    tradingsymbol: selectedInstrument.angelSymbol,
-                    symboltoken: selectedInstrument.token,
-                    transaction_type: "BUY",
-                    order_type: "MARKET",
-                    reference_price: refPrice,
-                  }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                  const msg = typeof data.detail === "string" ? data.detail : "Bulk order request failed.";
-                  throw new Error(msg);
-                }
-                const count = typeof data.success_count === "number" ? data.success_count : 0;
-                toast.success(`Deployed: Orders routed to ${count} client${count !== 1 ? "s" : ""}.`);
-                setDeploymentOpen(false);
-              } else {
-                // Normal user with connected broker → single order to their own account
-                const res = await fetch(`${API_BASE}/api/broker/place-order`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    user_id: user.id,
-                    broker_name: "angelone",
-                    symbol: selectedInstrument.value,
-                    qty,
-                    transaction_type: "BUY",
-                    order_type: "MARKET",
-                    angel_symbol: selectedInstrument.angelSymbol,
-                    token: selectedInstrument.token,
-                  }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                  const msg = typeof data.detail === "string" ? data.detail : "Order failed.";
-                  throw new Error(msg);
-                }
-                toast.success("Deployed: Order sent to your broker.");
-                setDeploymentOpen(false);
+              const res = await fetch(`${API_BASE}/api/strategy/deploy`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  user_id: user.id,
+                  broker_name: "angelone",
+                  strategy_name: strategyInput.trim().slice(0, 200) || "Backtest strategy",
+                  symbol: selectedInstrument.value,
+                  strategy_logic: backtestResult.generated_code.trim(),
+                  capital: capitalNum,
+                  angel_symbol: selectedInstrument.angelSymbol,
+                  token: selectedInstrument.token,
+                }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                const msg = typeof data.detail === "string" ? data.detail : "Deploy failed.";
+                toast.error(msg);
+                return;
               }
+              toast.success("Strategy is live. Orders will be placed only when your strategy conditions are met.");
+              setDeploymentOpen(false);
             } catch (err) {
               console.error(err);
-              toast.error("Failed to route orders. Check broker connection in Settings.");
+              toast.error("Failed to deploy. Check connection and try again.");
             } finally {
               setLiveDeploying(false);
             }
