@@ -52,6 +52,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from engine.sandbox import run_strategy_safely
 import routes.broker as broker
+import routes.clients as clients_router
 import routes.strategy as strategy_router
 from routes.broker import auto_refresh_sessions
 
@@ -210,6 +211,7 @@ app.add_middleware(
 app.middleware("http")(_rate_limit_middleware)
 
 app.include_router(broker.router)
+app.include_router(clients_router.router)
 app.include_router(strategy_router.router)
 
 # ---------------------------------------------------------------------------

@@ -1,234 +1,91 @@
-import { useEffect, useState } from "react";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { PlugZap } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
-
-interface BrokerCredentialRow {
-  id: string;
-  broker_name: string;
-  is_active: boolean;
-  created_at: string | null;
-}
+import { PlugZap, Key, Webhook, MessageSquare, AlertCircle } from "lucide-react";
+import { Link } from "react-router-dom";
 
 export default function Integrations() {
-  const [loading, setLoading] = useState(true);
-  const [brokers, setBrokers] = useState<BrokerCredentialRow[]>([]);
-  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
-  const [clientId, setClientId] = useState("");
-  const [pin, setPin] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  const fetchBrokers = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user?.id) {
-        setBrokers([]);
-        setLoading(false);
-        return;
-      }
-      const { data, error } = await supabase
-        .from("broker_credentials")
-        .select("id, broker_name, is_active, created_at")
-        .eq("user_id", user.id);
-      if (error) throw error;
-      setBrokers((data ?? []) as BrokerCredentialRow[]);
-    } catch (e) {
-      console.error(e);
-      toast.error("Failed to load broker integrations.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchBrokers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleConnectBroker = () => {
-    setClientId("");
-    setPin("");
-    setConnectDialogOpen(true);
-  };
-
-  const handleAngelLogin = async () => {
-    try {
-      setSubmitting(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user?.id) {
-        toast.error("You must be signed in to link your broker.");
-        return;
-      }
-      const API_BASE_URL =
-        window.location.hostname === "localhost"
-          ? "http://localhost:8000"
-          : "https://tradeky.onrender.com";
-      const res = await fetch(`${API_BASE_URL}/api/broker/angelone/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client_id: clientId,
-          password: pin,
-          user_id: user.id,
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        const msg =
-          typeof data.detail === "string"
-            ? data.detail
-            : `Angel One login failed (HTTP ${res.status})`;
-        throw new Error(msg);
-      }
-      toast.success("Angel One connected. Your connection will be kept active daily before market open.");
-      setConnectDialogOpen(false);
-      setLoading(true);
-      await fetchBrokers();
-    } catch (e) {
-      console.error(e);
-      toast.error(e instanceof Error ? e.message : "Angel One login failed.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   return (
     <MainLayout>
       <div className="p-4 md:p-6 max-w-7xl w-full mx-auto h-full overflow-auto space-y-6">
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              Configure firm-wide integrations. To manage individual investor credentials, visit the{" "}
+              <Link to="/client-accounts" className="text-primary underline hover:no-underline">
+                Client Accounts
+              </Link>{" "}
+              tab.
+            </p>
+          </div>
+        </div>
+
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold text-foreground flex items-center gap-2">
               <PlugZap className="w-5 h-5 text-primary" />
-              Broker Integrations
+              Firm-Level Infrastructure
             </h1>
             <p className="text-sm text-muted-foreground">
-              Connect broker accounts for live strategy execution across multiple clients.
+              B2B tools and API configurations for your RIA practice.
             </p>
           </div>
-          <Button
-            size="sm"
-            className="btn-glow bg-gradient-to-r from-primary to-accent"
-            onClick={handleConnectBroker}
-          >
-            Connect Angel One
-          </Button>
         </div>
 
-        <Card className="bg-card/80 border-border">
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">
-              Connected Brokers
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <p className="text-xs text-muted-foreground">Loading broker connections…</p>
-            ) : brokers.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                No broker accounts connected yet. Click &quot;Connect Broker&quot; to get started.
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <Card className="bg-card/80 border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
+                <Key className="w-4 h-4" />
+                Master API Key (Angel One)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground mb-3">
+                Firm-level Angel One API key for server-to-server authentication. Used for order routing and market data.
               </p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-border">
-                    <TableHead className="text-xs text-muted-foreground">Broker</TableHead>
-                    <TableHead className="text-xs text-muted-foreground">Status</TableHead>
-                    <TableHead className="text-xs text-muted-foreground">Date Connected</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {brokers.map((b) => (
-                    <TableRow key={b.id} className="border-border">
-                      <TableCell className="text-sm text-foreground">
-                        {b.broker_name}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={b.is_active ? "default" : "outline"}
-                          className={b.is_active ? "bg-profit/20 text-profit border-profit/40" : ""}
-                        >
-                          {b.is_active ? "Active" : "Inactive"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {b.created_at ? new Date(b.created_at).toLocaleDateString("en-IN") : "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
+              <Button variant="outline" size="sm" disabled className="opacity-70">
+                Configure (coming soon)
+              </Button>
+            </CardContent>
+          </Card>
 
-        <Dialog open={connectDialogOpen} onOpenChange={setConnectDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Connect Angel One</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-1">
-                <Label htmlFor="client-id" className="text-xs text-muted-foreground">
-                  Client ID
-                </Label>
-                <Input
-                  id="client-id"
-                  value={clientId}
-                  onChange={(e) => setClientId(e.target.value)}
-                  className="bg-card border-border text-sm"
-                  placeholder="Your Angel One client ID"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="pin" className="text-xs text-muted-foreground">
-                  PIN
-                </Label>
-                <Input
-                  id="pin"
-                  type="password"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  className="bg-card border-border text-sm"
-                  placeholder="Account PIN"
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setConnectDialogOpen(false)}
-                  disabled={submitting}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={handleAngelLogin}
-                  disabled={submitting || !clientId || !pin}
-                >
-                  {submitting ? "Connecting…" : "Connect"}
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+          <Card className="bg-card/80 border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
+                <Webhook className="w-4 h-4" />
+                TradingView Webhook Listener
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground mb-3">
+                Receive alerts from TradingView and trigger strategies or orders. Endpoint URL and secret.
+              </p>
+              <Button variant="outline" size="sm" disabled className="opacity-70">
+                Configure (coming soon)
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-card/80 border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
+                <MessageSquare className="w-4 h-4" />
+                Slack Alerts
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground mb-3">
+                Send trade confirmations, strategy signals, and risk alerts to a Slack channel.
+              </p>
+              <Button variant="outline" size="sm" disabled className="opacity-70">
+                Configure (coming soon)
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </MainLayout>
   );
 }
-

@@ -1,7 +1,6 @@
 import { 
   Beaker, 
-  Store, 
-  Users, 
+  UserPlus, 
   Settings, 
   ChevronLeft,
   Monitor,
@@ -25,17 +24,23 @@ const navItems = [
     description: "Build & backtest"
   },
   { 
-    title: "Marketplace", 
-    icon: Store, 
-    path: "/marketplace",
-    description: "Browse strategies"
+    title: "Client Accounts", 
+    icon: UserPlus, 
+    path: "/client-accounts",
+    description: "RIA client CRM"
   },
-  { 
-    title: "Community", 
-    icon: Users, 
-    path: "/community",
-    description: "Discussion"
-  },
+  // { 
+  //   title: "Marketplace", 
+  //   icon: Store, 
+  //   path: "/marketplace",
+  //   description: "Browse strategies"
+  // },
+  // { 
+  //   title: "Community", 
+  //   icon: Users, 
+  //   path: "/community",
+  //   description: "Discussion"
+  // },
   { 
     title: "Live Terminal", 
     icon: Monitor, 
@@ -46,7 +51,7 @@ const navItems = [
     title: "Integrations", 
     icon: PlugZap, 
     path: "/integrations",
-    description: "Broker connections"
+    description: "Firm infrastructure"
   },
   { 
     title: "Saved Strategies", 
