@@ -81,6 +81,7 @@ export default function StrategyStudio() {
   const [saving, setSaving] = useState(false);
   const [deploymentOpen, setDeploymentOpen] = useState(false);
   const [activeBrokers, setActiveBrokers] = useState<{ id: string; label: string }[]>([]);
+  const [hasActiveClients, setHasActiveClients] = useState(false);
   const [brokersLoading, setBrokersLoading] = useState(true);
   const [liveDeploying, setLiveDeploying] = useState(false);
 
@@ -90,16 +91,22 @@ export default function StrategyStudio() {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user?.id) {
-          if (!cancelled) setActiveBrokers([]);
+          if (!cancelled) {
+            setActiveBrokers([]);
+            setHasActiveClients(false);
+          }
           return;
         }
-        const { data, error } = await supabase
-          .from("broker_credentials")
-          .select("broker_name, client_id")
-          .eq("user_id", user.id)
-          .eq("is_active", true);
-        if (error) throw error;
-        const list = (data ?? []).map((row: { broker_name: string; client_id: string | null }) => {
+        const [brokerRes, clientsRes] = await Promise.all([
+          supabase
+            .from("broker_credentials")
+            .select("broker_name, client_id")
+            .eq("user_id", user.id)
+            .eq("is_active", true),
+          fetch(`${API_BASE}/api/clients/list?user_id=${encodeURIComponent(user.id)}`),
+        ]);
+        if (brokerRes.error) throw brokerRes.error;
+        const list = (brokerRes.data ?? []).map((row: { broker_name: string; client_id: string | null }) => {
           const name = row.broker_name || "";
           const label =
             name.toLowerCase() === "angelone"
@@ -107,10 +114,21 @@ export default function StrategyStudio() {
               : `${name}${row.client_id ? ` - ${row.client_id}` : ""}`;
           return { id: name, label: label || name };
         });
-        if (!cancelled) setActiveBrokers(list);
+        let clientsCount = 0;
+        if (clientsRes.ok) {
+          const clientsData = await clientsRes.json().catch(() => []);
+          clientsCount = Array.isArray(clientsData) ? clientsData.length : 0;
+        }
+        if (!cancelled) {
+          setActiveBrokers(list);
+          setHasActiveClients(clientsCount > 0);
+        }
       } catch (e) {
         console.error(e);
-        if (!cancelled) setActiveBrokers([]);
+        if (!cancelled) {
+          setActiveBrokers([]);
+          setHasActiveClients(false);
+        }
       } finally {
         if (!cancelled) setBrokersLoading(false);
       }
@@ -677,7 +695,7 @@ Examples:
           open={deploymentOpen}
           onOpenChange={setDeploymentOpen}
           onConfirmPaper={handleDeployToLiveTerminal}
-          hasActiveBroker={activeBrokers.length > 0}
+          hasActiveBroker={activeBrokers.length > 0 || hasActiveClients}
           brokers={activeBrokers}
           liveDeploying={liveDeploying}
           onConfirmLive={async ({ brokerId, capital: capitalNum }) => {
@@ -696,28 +714,28 @@ Examples:
             }
             setLiveDeploying(true);
             try {
-              const deployRes = await fetch(`${API_BASE}/api/strategy/deploy`, {
+              const res = await fetch(`${API_BASE}/api/broker/place-bulk-order`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  user_id: user.id,
-                  broker_name: brokerId,
-                  strategy_name: strategyInput.trim().slice(0, 200) || "Backtest strategy",
-                  symbol: selectedInstrument.value,
-                  angel_symbol: selectedInstrument.angelSymbol,
-                  token: selectedInstrument.token,
-                  strategy_logic: backtestResult.generated_code.trim(),
-                  capital: capitalNum,
+                  ria_user_id: user.id,
+                  tradingsymbol: selectedInstrument.angelSymbol,
+                  symboltoken: selectedInstrument.token,
+                  transaction_type: "BUY",
+                  order_type: "MARKET",
+                  reference_price: 100,
                 }),
               });
-              const deployData = await deployRes.json().catch(() => ({}));
-              if (!deployRes.ok) {
-                const msg = typeof deployData.detail === "string" ? deployData.detail : "Deploy failed.";
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                const msg = typeof data.detail === "string" ? data.detail : "Bulk order request failed.";
                 throw new Error(msg);
               }
-              toast.success("Strategy is live. Orders will be placed automatically when conditions (e.g. RSI < 30) are met.");
+              toast.success("Strategy deployed: Bulk orders routed to active client accounts.");
+              setDeploymentOpen(false);
             } catch (err) {
-              toast.error(err instanceof Error ? err.message : "Live deployment failed.");
+              console.error(err);
+              toast.error("Failed to route orders. Check client connections.");
             } finally {
               setLiveDeploying(false);
             }

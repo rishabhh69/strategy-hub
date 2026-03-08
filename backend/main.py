@@ -1710,7 +1710,7 @@ def _run_strategy_monitor() -> None:
         return
     if not deployments:
         return
-    from routes.broker import get_angel_positions, place_order_impl
+    from routes.broker import get_angel_positions, place_order_impl, place_bulk_order_impl
     for dep in deployments:
         try:
             user_id = dep.get("user_id")
@@ -1763,14 +1763,47 @@ def _run_strategy_monitor() -> None:
             price = float(quote.get("price", 0)) if quote else 0
             if not price or price <= 0:
                 continue
-            qty = max(1, int(capital / price))
-            angel_sym = dep.get("angel_symbol") or None
-            token_val = dep.get("token") or None
-            place_order_impl(
-                user_id, broker_name, symbol, qty, "BUY", "MARKET",
-                angel_symbol=angel_sym, token=token_val,
+            angel_sym = dep.get("angel_symbol") or symbol
+            token_val = dep.get("token") or ""
+            # RIA with active client_accounts: place bulk order; else solo order
+            clients = _sb_get(
+                "client_accounts",
+                filters={"ria_user_id": f"eq.{user_id}", "status": "eq.Active"},
+                select="id",
+                limit=1,
             )
-            logging.info("Strategy monitor placed order for user=%s symbol=%s qty=%s", user_id[:8], symbol, qty)
+            if clients and angel_sym and token_val:
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        result = loop.run_until_complete(
+                            place_bulk_order_impl(
+                                ria_user_id=user_id,
+                                tradingsymbol=angel_sym,
+                                symboltoken=token_val,
+                                transaction_type="BUY",
+                                order_type="MARKET",
+                                reference_price=price,
+                                exchange="NSE",
+                                price=None,
+                            )
+                        )
+                        logging.info(
+                            "Strategy monitor placed bulk orders for RIA user=%s symbol=%s success=%s failed=%s",
+                            user_id[:8], symbol, result.get("success_count"), result.get("failed_count"),
+                        )
+                    finally:
+                        loop.close()
+                except Exception as bulk_err:  # noqa: BLE001
+                    logging.warning("Strategy monitor bulk order failed for deployment %s: %s", dep.get("id"), bulk_err)
+            else:
+                qty = max(1, int(capital / price))
+                place_order_impl(
+                    user_id, broker_name, symbol, qty, "BUY", "MARKET",
+                    angel_symbol=angel_sym or None, token=token_val or None,
+                )
+                logging.info("Strategy monitor placed order for user=%s symbol=%s qty=%s", user_id[:8], symbol, qty)
         except Exception as e:  # noqa: BLE001
             logging.warning("Strategy monitor tick failed for deployment %s: %s", dep.get("id"), e)
 

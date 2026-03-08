@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -10,6 +11,7 @@ from SmartApi import SmartConnect
 import pyotp
 
 from database import get_supabase
+from utils.encryption import decrypt_secret
 
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
@@ -420,4 +422,227 @@ async def place_order(payload: PlaceOrderPayload) -> Dict[str, Any]:
   except Exception as e:  # noqa: BLE001
     logger.warning("place_order failed: %s", e)
     raise HTTPException(400, f"Order placement failed: {e}") from e
+
+
+# ---------------------------------------------------------------------------
+# Bulk order: RIA triggers trade for all active clients (decrypt creds, concurrent execution)
+# ---------------------------------------------------------------------------
+
+class PlaceBulkOrderPayload(BaseModel):
+  ria_user_id: str = Field(..., min_length=1, max_length=128)
+  tradingsymbol: str = Field(..., min_length=1, max_length=64)
+  symboltoken: str = Field(..., min_length=1, max_length=32)
+  transaction_type: str = Field(..., pattern="^(BUY|SELL)$")
+  order_type: str = Field(..., pattern="^(MARKET|LIMIT)$")
+  price: Optional[float] = Field(default=None, ge=0)
+  exchange: str = Field(default="NSE", max_length=8)
+  # Reference price (e.g. LTP) used to compute quantity from capital_allocation: qty = capital / reference_price
+  reference_price: float = Field(..., gt=0, description="Current price for qty calculation (e.g. LTP)")
+
+
+def _execute_single_client_order_sync(
+  client_exec: Dict[str, Any],
+  order_details: Dict[str, Any],
+) -> Dict[str, Any]:
+  """
+  Synchronous helper: create SmartConnect session for this client and place order.
+  Called from asyncio.to_thread. Returns {client_id, client_name, success, orderid?, error?}.
+  """
+  api_key = (os.getenv("ANGEL_API_KEY") or "").strip()
+  if not api_key:
+    return {
+      "client_id": client_exec.get("client_id"),
+      "client_name": client_exec.get("client_name"),
+      "success": False,
+      "error": "ANGEL_API_KEY not configured",
+    }
+  client_id = (client_exec.get("client_id") or "").strip()
+  pin = (client_exec.get("pin") or "").strip()
+  totp_pin = (client_exec.get("totp_pin") or "").strip()
+  qty = int(client_exec.get("quantity", 1))
+  if not client_id or not pin or not totp_pin:
+    return {
+      "client_id": client_id,
+      "client_name": client_exec.get("client_name"),
+      "success": False,
+      "error": "Missing client_id, pin, or totp",
+    }
+  if qty < 1:
+    return {
+      "client_id": client_id,
+      "client_name": client_exec.get("client_name"),
+      "success": False,
+      "error": "Quantity must be >= 1",
+    }
+  try:
+    smart = SmartConnect(api_key=api_key)
+    session = smart.generateSession(client_id, pin, totp_pin)
+    data = (session or {}).get("data") or {}
+    token_data = data.get("data") or data
+    jwt_token = (token_data or {}).get("jwtToken")
+    if not jwt_token:
+      return {
+        "client_id": client_id,
+        "client_name": client_exec.get("client_name"),
+        "success": False,
+        "error": "Angel One login failed (no token)",
+      }
+    smart.setAccessToken(jwt_token)
+    refresh = (token_data or {}).get("refreshToken")
+    if refresh:
+      smart.setRefreshToken(refresh)
+    orderparams: Dict[str, Any] = {
+      "variety": "NORMAL",
+      "tradingsymbol": order_details["tradingsymbol"],
+      "symboltoken": order_details["symboltoken"],
+      "transactiontype": order_details["transaction_type"],
+      "exchange": order_details.get("exchange", "NSE"),
+      "ordertype": order_details["order_type"],
+      "producttype": "INTRADAY",
+      "duration": "DAY",
+      "quantity": str(qty),
+    }
+    if (order_details.get("order_type") or "").upper() == "LIMIT" and order_details.get("price") is not None:
+      orderparams["price"] = str(round(order_details["price"], 2))
+    result = smart.placeOrder(orderparams)
+    data = result if isinstance(result, dict) else getattr(result, "data", result) or {}
+    orderid = data.get("data", data) if isinstance(data.get("data"), str) else (data.get("data") or data).get("orderid")
+    if not orderid:
+      orderid = data.get("orderid")
+    return {
+      "client_id": client_id,
+      "client_name": client_exec.get("client_name"),
+      "success": True,
+      "orderid": str(orderid) if orderid else None,
+    }
+  except Exception as e:  # noqa: BLE001
+    return {
+      "client_id": client_id,
+      "client_name": client_exec.get("client_name"),
+      "success": False,
+      "error": str(e),
+    }
+
+
+async def place_bulk_order_impl(
+  ria_user_id: str,
+  tradingsymbol: str,
+  symboltoken: str,
+  transaction_type: str,
+  order_type: str,
+  reference_price: float,
+  exchange: str = "NSE",
+  price: Optional[float] = None,
+) -> Dict[str, Any]:
+  """
+  RIA bulk execution: fetch active clients, decrypt creds, place orders concurrently.
+  Used by POST /place-bulk-order and by the strategy monitor when the deployment user has client accounts.
+  """
+  try:
+    supabase = get_supabase()
+  except RuntimeError:
+    return {"ok": False, "total": 0, "success_count": 0, "failed_count": 0, "successful": [], "failed": [], "message": "Supabase not configured."}
+
+  try:
+    resp = (
+      supabase.table("client_accounts")
+      .select("id, client_id, client_name, capital_allocation, encrypted_pin, encrypted_totp_secret")
+      .eq("ria_user_id", ria_user_id)
+      .eq("status", "Active")
+      .execute()
+    )
+  except Exception as e:  # noqa: BLE001
+    logger.exception("place_bulk_order_impl: failed to fetch client_accounts")
+    return {"ok": False, "total": 0, "success_count": 0, "failed_count": 0, "successful": [], "failed": [], "message": str(e)}
+
+  rows = getattr(resp, "data", None) or []
+  if not rows:
+    return {
+      "ok": True,
+      "total": 0,
+      "success_count": 0,
+      "failed_count": 0,
+      "successful": [],
+      "failed": [],
+      "message": "No active clients found for this RIA.",
+    }
+
+  order_details = {
+    "tradingsymbol": tradingsymbol.strip(),
+    "symboltoken": symboltoken.strip(),
+    "transaction_type": transaction_type.upper(),
+    "order_type": order_type.upper(),
+    "exchange": (exchange or "NSE").strip().upper(),
+    "price": price,
+  }
+
+  client_executions: List[Dict[str, Any]] = []
+  for row in rows:
+    try:
+      pin = decrypt_secret(row.get("encrypted_pin") or "")
+      totp_secret = decrypt_secret(row.get("encrypted_totp_secret") or "")
+    except Exception as e:  # noqa: BLE001
+      logger.warning("place_bulk_order_impl: decrypt failed for client %s: %s", row.get("client_id"), e)
+      client_executions.append({
+        "client_id": row.get("client_id"),
+        "client_name": row.get("client_name"),
+        "success": False,
+        "error": "Decryption failed",
+      })
+      continue
+    totp_pin = str(pyotp.TOTP(totp_secret).now()).strip()
+    capital = float(row.get("capital_allocation") or 0)
+    if capital <= 0:
+      capital = 1.0
+    quantity = max(1, int(capital / reference_price))
+    client_executions.append({
+      "client_id": (row.get("client_id") or "").strip(),
+      "client_name": (row.get("client_name") or "").strip(),
+      "pin": pin,
+      "totp_pin": totp_pin,
+      "capital_allocation": capital,
+      "quantity": quantity,
+    })
+
+  async def run_one(ce: Dict[str, Any]) -> Dict[str, Any]:
+    if ce.get("success") is False:
+      return ce
+    return await asyncio.to_thread(_execute_single_client_order_sync, ce, order_details)
+
+  results = await asyncio.gather(*[run_one(ce) for ce in client_executions], return_exceptions=True)
+
+  successful = [{"client_id": r.get("client_id"), "client_name": r.get("client_name"), "orderid": r.get("orderid")} for r in results if isinstance(r, dict) and r.get("success")]
+  failed: List[Dict[str, Any]] = []
+  for r in results:
+    if isinstance(r, Exception):
+      failed.append({"success": False, "error": str(r)})
+    elif isinstance(r, dict) and not r.get("success"):
+      failed.append({"client_id": r.get("client_id"), "client_name": r.get("client_name"), "error": r.get("error", "Unknown error")})
+
+  return {
+    "ok": True,
+    "total": len(client_executions),
+    "success_count": len(successful),
+    "failed_count": len(failed),
+    "successful": successful,
+    "failed": failed,
+  }
+
+
+@router.post("/place-bulk-order")
+async def place_bulk_order(payload: PlaceBulkOrderPayload) -> Dict[str, Any]:
+  """RIA bulk execution HTTP endpoint. Delegates to place_bulk_order_impl."""
+  api_key = (os.getenv("ANGEL_API_KEY") or "").strip()
+  if not api_key:
+    raise HTTPException(500, "ANGEL_API_KEY not configured.")
+  return await place_bulk_order_impl(
+    ria_user_id=payload.ria_user_id,
+    tradingsymbol=payload.tradingsymbol,
+    symboltoken=payload.symboltoken,
+    transaction_type=payload.transaction_type,
+    order_type=payload.order_type,
+    reference_price=payload.reference_price,
+    exchange=payload.exchange,
+    price=payload.price,
+  )
 
