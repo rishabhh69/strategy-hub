@@ -1750,7 +1750,7 @@ def _run_strategy_monitor() -> None:
             result_df = loc["strategy"](df.copy())
             if result_df is None or len(result_df) == 0:
                 continue
-            # Only execute trade when strategy conditions are met: last bar must signal buy
+            # Determine trade direction from strategy output
             last = result_df.iloc[-1]
             signal = last.get("signal", 0)
             position = last.get("position", 0)
@@ -1759,26 +1759,40 @@ def _run_strategy_monitor() -> None:
                 pos_val = int(position) if position is not None else 0
             except (TypeError, ValueError):
                 sig_val, pos_val = 0, 0
-            buy_signal = (sig_val == 1 or pos_val == 1)
-            if not buy_signal:
+
+            want_buy = (sig_val == 1 or pos_val == 1)
+            want_sell = (sig_val == -1 or pos_val == -1)
+            if not want_buy and not want_sell:
                 continue
+
+            # Check current broker positions for this symbol
             positions = get_angel_positions(user_id, broker_name)
             tradingsymbol_like = symbol.upper().replace(".NS", "").replace(" ", "")
-            has_open = False
+            open_qty = 0
             for pos in positions:
                 ts = (pos.get("tradingsymbol") or pos.get("symbol") or "").upper().replace(" ", "")
                 netqty = int(pos.get("netqty") or pos.get("quantity") or 0)
                 if (tradingsymbol_like in ts or ts in tradingsymbol_like) and netqty != 0:
-                    has_open = True
+                    open_qty = netqty
                     break
-            if has_open:
+
+            # BUY only when no open position; SELL only when an open position exists
+            if want_buy and open_qty != 0:
                 continue
+            if want_sell and open_qty == 0:
+                continue
+
+            txn_type = "BUY" if want_buy else "SELL"
+
             quote = _yahoo_v8_quote(sym)
             price = float(quote.get("price", 0)) if quote else 0
             if not price or price <= 0:
                 continue
             angel_sym = dep.get("angel_symbol") or symbol
             token_val = dep.get("token") or ""
+
+            order_qty = max(1, int(capital / price)) if want_buy else abs(open_qty)
+
             # RIA with active client_accounts: place bulk order; else solo order
             clients = _sb_get(
                 "client_accounts",
@@ -1796,7 +1810,7 @@ def _run_strategy_monitor() -> None:
                                 ria_user_id=user_id,
                                 tradingsymbol=angel_sym,
                                 symboltoken=token_val,
-                                transaction_type="BUY",
+                                transaction_type=txn_type,
                                 order_type="MARKET",
                                 reference_price=price,
                                 exchange="NSE",
@@ -1804,20 +1818,19 @@ def _run_strategy_monitor() -> None:
                             )
                         )
                         logging.info(
-                            "Strategy monitor placed bulk orders for RIA user=%s symbol=%s success=%s failed=%s",
-                            user_id[:8], symbol, result.get("success_count"), result.get("failed_count"),
+                            "Strategy monitor placed bulk %s for RIA user=%s symbol=%s success=%s failed=%s",
+                            txn_type, user_id[:8], symbol, result.get("success_count"), result.get("failed_count"),
                         )
                     finally:
                         loop.close()
                 except Exception as bulk_err:  # noqa: BLE001
                     logging.warning("Strategy monitor bulk order failed for deployment %s: %s", dep.get("id"), bulk_err)
             else:
-                qty = max(1, int(capital / price))
                 place_order_impl(
-                    user_id, broker_name, symbol, qty, "BUY", "MARKET",
+                    user_id, broker_name, symbol, order_qty, txn_type, "MARKET",
                     angel_symbol=angel_sym or None, token=token_val or None,
                 )
-                logging.info("Strategy monitor placed order for user=%s symbol=%s qty=%s", user_id[:8], symbol, qty)
+                logging.info("Strategy monitor placed %s for user=%s symbol=%s qty=%s", txn_type, user_id[:8], symbol, order_qty)
         except Exception as e:  # noqa: BLE001
             logging.warning("Strategy monitor tick failed for deployment %s: %s", dep.get("id"), e)
 
@@ -1827,9 +1840,8 @@ def _run_strategy_monitor() -> None:
 # Fetches candles (Yahoo), runs run_strategy_safely(); on BUY/SELL triggers paper or live order.
 # ---------------------------------------------------------------------------
 def _strategy_worker_terminal() -> None:
-    """APScheduler job: fetch active terminal strategies, run sandbox evaluate(), execute on BUY/SELL."""
-    if not _sb_ok():
-        return
+    """APScheduler job: fetch active terminal strategies, run sandbox evaluate(), execute on BUY/SELL.
+    Tries to fetch even when marked down so we auto-recover after Supabase is back."""
     try:
         rows = _sb_get(
             "strategies",

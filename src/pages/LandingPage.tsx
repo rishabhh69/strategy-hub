@@ -1,11 +1,16 @@
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Zap, Shield, ArrowRight, Terminal, LineChart, Store } from "lucide-react";
+import { Sparkles, Zap, Shield, ArrowRight, Terminal, Store, Brain, Check, Users, Layers } from "lucide-react";
 import { TickerTape } from "@/components/layout/TickerTape";
 import { supabase } from "@/integrations/supabase/client";
 
-const TYPING_TEXT = "> Target: All Active Client Accounts... Executing parallel routing... 50/50 Orders Filled. Latency: 42ms.";
+const TYPING_LINES = [
+  "> Compiling strategy...",
+  "> NLP parsed.",
+  "> Route: Live Terminal OR Multi-Account Broker.",
+];
+const TYPING_TEXT = TYPING_LINES.join(" ");
 
 function TypingCodeBlock() {
   const [display, setDisplay] = useState("");
@@ -37,64 +42,32 @@ function TypingCodeBlock() {
   );
 }
 
-const FeatureCard = ({
+function GlassCard({
   icon: Icon,
   title,
   description,
-  className = "",
 }: {
   icon: React.ElementType;
   title: string;
   description: string;
-  className?: string;
-}) => (
-  <div
-    className={`group relative overflow-hidden rounded-2xl bg-card/50 backdrop-blur border border-border p-6 transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 hover:ring-1 hover:ring-primary/40 ${className}`}
-  >
-    <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-    <div className="relative">
-      <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
-        <Icon className="w-6 h-6 text-primary" />
-      </div>
-      <h3 className="text-lg font-semibold text-foreground mb-2">{title}</h3>
-      <p className="text-muted-foreground text-sm">{description}</p>
-    </div>
-  </div>
-);
-
-const StepCard = ({ 
-  number, 
-  title, 
-  description, 
-  code 
-}: { 
-  number: number; 
-  title: string; 
-  description: string; 
-  code?: string;
-}) => (
-  <div className="relative">
-    <div className="flex items-start gap-4">
-      <div className="flex-shrink-0 w-10 h-10 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center font-data text-primary font-bold">
-        {number}
-      </div>
-      <div className="flex-1">
+}) {
+  return (
+    <div className="group relative overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.03] backdrop-blur-xl p-6 transition-all duration-300 hover:-translate-y-2 hover:border-blue-500/40 hover:shadow-[0_0_40px_rgba(59,130,246,0.12)]">
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/[0.04] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+      <div className="relative">
+        <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center mb-4 group-hover:bg-blue-500/20 group-hover:scale-105 transition-all duration-300">
+          <Icon className="w-6 h-6 text-blue-400" />
+        </div>
         <h3 className="text-lg font-semibold text-foreground mb-2">{title}</h3>
-        <p className="text-muted-foreground text-sm mb-3">{description}</p>
-        {code && (
-          <div className="bg-background/80 rounded-lg p-3 border border-border font-mono text-xs text-muted-foreground">
-            {code}
-          </div>
-        )}
+        <p className="text-muted-foreground text-sm leading-relaxed">{description}</p>
       </div>
     </div>
-  </div>
-);
+  );
+}
 
 export default function LandingPage() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [authReady,  setAuthReady]  = useState(false);   // true once we know auth state
-  const navigate = useNavigate();
+  const [authReady,  setAuthReady]  = useState(false);
 
   useEffect(() => {
     // onAuthStateChange fires INITIAL_SESSION immediately on mount — single source of truth
@@ -161,48 +134,45 @@ export default function LandingPage() {
         </div>
       </nav>
 
-      {/* Hero Section */}
-      <section className="relative overflow-hidden py-24 lg:py-32">
-        {/* Background gradient */}
+      {/* ═══════════════ SECTION 1: GLOBAL HERO ═══════════════ */}
+      <section className="relative overflow-hidden py-24 lg:py-36">
         <div className="absolute inset-0 bg-grid opacity-30" />
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-[128px]" />
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-accent/15 rounded-full blur-[128px]" />
-        
+        <div className="absolute top-1/4 left-1/3 w-[32rem] h-[32rem] bg-blue-600/15 rounded-full blur-[160px]" />
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-indigo-500/10 rounded-full blur-[128px]" />
+
         <div className="relative max-w-7xl mx-auto px-6">
-          <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
-            {/* Left content */}
+          <div className="grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
             <div className="text-center lg:text-left">
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 mb-6">
-                <Sparkles className="w-4 h-4 text-primary" />
-                <span className="text-sm text-primary font-medium">B2B Wealth Tech</span>
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 mb-6">
+                <Sparkles className="w-4 h-4 text-blue-400" />
+                <span className="text-sm text-blue-400 font-medium">Dual-Sided Execution Platform</span>
               </div>
-              
-              <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-foreground leading-tight mb-6">
-                Scale Your AUM.{" "}
-                <span className="text-gradient">Not Your Headcount.</span>
+
+              <h1 className="text-4xl md:text-5xl lg:text-[3.5rem] font-bold leading-tight mb-6">
+                <span className="text-foreground">The Algorithmic Execution Engine for the </span>
+                <span className="bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">Next Generation of Wealth.</span>
               </h1>
-              
-              <p className="text-lg text-muted-foreground mb-8 max-w-xl mx-auto lg:mx-0">
-                The operating system for modern wealth managers. Translate plain-English strategies into simultaneous, concurrent order execution across all your clients&apos; broker accounts instantly.
+
+              <p className="text-lg text-muted-foreground mb-10 max-w-xl mx-auto lg:mx-0">
+                Whether you manage ₹50 Crores or are building your first edge, Tradeky translates plain English into zero-latency live market execution.
               </p>
-              
+
               <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
-                <Link to="/auth?mode=signup">
-                  <Button size="lg" className="w-full sm:w-auto animate-pulse shadow-lg shadow-primary/25 hover:shadow-primary/40 hover:animate-none">
-                    Request Enterprise Demo
+                <a href="#b2b" className="inline-block">
+                  <Button size="lg" className="w-full sm:w-auto shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 transition-shadow duration-300">
+                    For Wealth Managers (RIAs)
                   </Button>
-                </Link>
+                </a>
                 <a
-                  href="#"
-                  className="group/btn inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-transparent px-6 py-3 text-sm font-medium text-foreground hover:bg-muted/40 hover:border-border-bright transition-all duration-300"
+                  href="#b2c"
+                  className="group/btn inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/30 bg-transparent px-6 py-3 text-sm font-medium text-blue-400 hover:bg-blue-500/10 hover:border-blue-500/50 hover:shadow-[0_0_24px_rgba(59,130,246,0.15)] transition-all duration-300"
                 >
-                  Read the Docs
-                  <ArrowRight className="w-4 h-4 ml-1 transition-transform duration-300 group-hover/btn:translate-x-1" />
+                  For Independent Traders
+                  <ArrowRight className="w-4 h-4 transition-transform duration-300 group-hover/btn:translate-x-1" />
                 </a>
               </div>
             </div>
-            
-            {/* Right visual — typing animation */}
+
             <div className="flex justify-center lg:justify-end">
               <TypingCodeBlock />
             </div>
@@ -210,152 +180,184 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Trust & Infrastructure Banner */}
-      <section className="relative border-y border-border/50 bg-card/20">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-sm text-muted-foreground/90">
-            <span className="inline-flex items-center gap-2">🔒 Zero-Knowledge AES-256 Encryption</span>
-            <span className="hidden sm:inline text-border">|</span>
-            <span className="inline-flex items-center gap-2">⚡ Concurrent Multi-Account Routing</span>
-            <span className="hidden sm:inline text-border">|</span>
-            <span className="inline-flex items-center gap-2">🏦 SEBI-Compliant Architecture</span>
-          </div>
-        </div>
-      </section>
-
-      {/* Features Grid */}
-      <section className="py-24 relative">
-        <div className="max-w-7xl mx-auto px-6">
+      {/* ═══════════════ SECTION 2: CORE TECH MOAT ═══════════════ */}
+      <section className="relative py-24 border-y border-white/[0.06]">
+        <div className="absolute inset-0 bg-gradient-to-b from-background via-card/20 to-background" />
+        <div className="relative max-w-7xl mx-auto px-6">
           <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              Institutional-Grade Execution, Deployed in Minutes.
+            <h2 className="text-3xl md:text-4xl font-bold mb-4">
+              <span className="bg-gradient-to-r from-slate-100 to-slate-300 bg-clip-text text-transparent">Institutional Tech, Stripped of the Friction.</span>
             </h2>
             <p className="text-muted-foreground max-w-2xl mx-auto">
-              Enterprise infrastructure that scales with your AUM.
+              The core engine that powers both sides of the marketplace.
             </p>
           </div>
-          
+
           <div className="grid md:grid-cols-3 gap-6">
-            <FeatureCard
-              icon={Sparkles}
-              title="Natural Language Compiler"
-              description="Describe your firm's logic in plain English. Our proprietary engine compiles it into production-ready algorithmic routing."
+            <GlassCard
+              icon={Brain}
+              title="Deterministic NLP Compiler"
+              description="Type your logic in plain English. Our engine writes the Python, backtests it, and readies it for deployment instantly."
             />
-            <FeatureCard
-              icon={Zap}
-              title="Zero-Slippage Concurrency"
-              description="Fire orders to 5 or 500 client accounts at the exact same millisecond using our asynchronous execution core."
+            <GlassCard
+              icon={Layers}
+              title="Bifurcated Execution"
+              description="Forward-test with zero risk on our Simulated Live Terminal, or deploy directly to your broker API for live market action."
             />
-            <FeatureCard
+            <GlassCard
               icon={Shield}
-              title="Client Account CRM"
-              description="Manage individual investor capital allocations and securely store encrypted broker credentials in a centralized, zero-knowledge vault."
+              title="Greed AI Guardrails"
+              description="Hard-coded risk management. Automatically enforce max-drawdowns and halt revenge trading before it hits the exchange."
             />
           </div>
         </div>
       </section>
 
-      {/* How It Works */}
-      <section className="py-24 bg-card/30 border-y border-border">
-        <div className="max-w-4xl mx-auto px-6">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              From Strategy to Multi-Account Execution.
-            </h2>
-            <p className="text-muted-foreground">
-              One workflow from firm logic to concurrent client execution.
-            </p>
-          </div>
-          
-          <div className="space-y-12">
-            <StepCard
-              number={1}
-              title="Digitize Your Edge"
-              description="Input your firm's proprietary trading logic without writing a single line of code."
-            />
-            <div className="border-l-2 border-dashed border-border ml-5 h-8" />
-            <StepCard
-              number={2}
-              title="Allocate Client Capital"
-              description="Select target portfolios. Our engine automatically calculates pro-rata position sizing based on each client's AUM."
-            />
-            <div className="border-l-2 border-dashed border-border ml-5 h-8" />
-            <StepCard
-              number={3}
-              title="Deploy Concurrently"
-              description="One click routes real-time signals to dozens of connected broker APIs simultaneously."
-            />
+      {/* ═══════════════ SECTION 3: B2B BLOCK ═══════════════ */}
+      <section id="b2b" className="relative py-28 overflow-hidden scroll-mt-20">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,_rgba(30,58,138,0.15)_0%,_transparent_60%)]" />
+        <div className="absolute top-0 right-0 w-[40rem] h-[40rem] bg-blue-900/10 rounded-full blur-[200px]" />
+
+        <div className="relative max-w-7xl mx-auto px-6">
+          <div className="grid lg:grid-cols-2 gap-16 items-center">
+            <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 mb-6">
+                <Users className="w-4 h-4 text-blue-400" />
+                <span className="text-sm text-blue-400 font-medium">For Wealth Managers</span>
+              </div>
+
+              <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4 leading-tight">
+                For RIAs: Scale Your AUM,{" "}
+                <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">Not Your Headcount.</span>
+              </h2>
+              <p className="text-muted-foreground mb-8">
+                Purpose-built infrastructure for RIAs managing multiple client accounts through a single pane of glass.
+              </p>
+
+              <div className="space-y-5">
+                {[
+                  { title: "Concurrent Multi-Account Routing", text: "Fire trades to dozens of client Angel One accounts at the exact same millisecond." },
+                  { title: "Zero-Knowledge Encrypted CRM", text: "Store client broker credentials securely with AES-256 encryption." },
+                  { title: "Pro-Rata Position Sizing", text: "The engine automatically adjusts trade sizes based on individual client capital." },
+                ].map((item) => (
+                  <div key={item.title} className="flex items-start gap-3">
+                    <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500/20 border border-blue-500/40 flex items-center justify-center mt-0.5">
+                      <Check className="w-3.5 h-3.5 text-blue-400" />
+                    </div>
+                    <div>
+                      <span className="font-semibold text-foreground">{item.title}</span>
+                      <p className="text-sm text-muted-foreground mt-0.5">{item.text}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Right: UI mockup placeholder */}
+            <div className="relative flex items-center justify-center">
+              <div className="absolute -inset-6 bg-gradient-to-br from-blue-500/10 via-transparent to-indigo-500/10 blur-3xl opacity-60" />
+              <div className="relative w-full max-w-md rounded-2xl border border-white/[0.08] bg-white/[0.03] backdrop-blur-xl p-6 shadow-2xl">
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="w-3 h-3 rounded-full bg-red-500/80" />
+                  <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+                  <div className="w-3 h-3 rounded-full bg-green-500/80" />
+                  <span className="ml-2 text-xs text-muted-foreground font-mono">multi_account_router.py</span>
+                </div>
+                <div className="bg-background/80 rounded-lg p-4 border border-border font-mono text-xs space-y-1.5">
+                  <div><span className="text-blue-400">for</span> <span className="text-foreground">client</span> <span className="text-blue-400">in</span> <span className="text-foreground">active_clients:</span></div>
+                  <div className="pl-4"><span className="text-muted-foreground">qty = pro_rata(client.capital)</span></div>
+                  <div className="pl-4"><span className="text-green-400">place_order</span><span className="text-foreground">(client.broker, symbol, qty)</span></div>
+                  <div className="mt-3 pt-3 border-t border-border text-green-400">✓ 47/47 orders filled — avg latency 38ms</div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* Retail & Marketplace — Dual-Sided Marketplace */}
-      <section className="relative border-t border-border/60 bg-[#0a0f1a] py-24">
-        <div className="max-w-7xl mx-auto px-6">
+      {/* ═══════════════ SECTION 4: B2C BLOCK ═══════════════ */}
+      <section id="b2c" className="relative py-28 bg-slate-950/60 border-y border-white/[0.06] scroll-mt-20">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_right,_rgba(99,102,241,0.08)_0%,_transparent_60%)]" />
+
+        <div className="relative max-w-7xl mx-auto px-6">
           <div className="text-center mb-16">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 mb-6">
+              <Terminal className="w-4 h-4 text-indigo-400" />
+              <span className="text-sm text-indigo-400 font-medium">For Independent Traders</span>
+            </div>
+
             <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              The Tradeky Marketplace: Alpha for Everyone.
+              For Retail: Code-Free Alpha and{" "}
+              <span className="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">Marketplace Access.</span>
             </h2>
             <p className="text-muted-foreground max-w-2xl mx-auto">
-              Whether you are building your own edge or following verified experts, Tradeky brings institutional-grade execution to the independent trader.
+              Build, test, and deploy strategies without writing a single line of code — or subscribe to ones built by experts.
             </p>
           </div>
 
           <div className="grid md:grid-cols-3 gap-6">
-            <div className="group relative overflow-hidden rounded-2xl bg-card/50 backdrop-blur border border-border p-6 transition-all duration-300 hover:-translate-y-2 hover:border-blue-500/50 hover:shadow-[0_0_30px_rgba(59,130,246,0.15)]">
-              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
-                <Terminal className="w-6 h-6 text-primary" />
+            {[
+              {
+                num: 1,
+                icon: Sparkles,
+                title: "Build in the Strategy Studio",
+                desc: "Use our NLP to create complex indicators (RSI, MACD) without knowing Python. Backtest instantly on historical data.",
+                color: "indigo",
+              },
+              {
+                num: 2,
+                icon: Zap,
+                title: "Connect Your Broker",
+                desc: "Link your personal Angel One account for seamless, automated order routing — paper or live.",
+                color: "violet",
+              },
+              {
+                num: 3,
+                icon: Store,
+                title: "The Tradeky Marketplace",
+                desc: "Don't want to build? Subscribe to SEBI-compliant strategies built by verified RIAs and auto-execute them on your account.",
+                color: "purple",
+              },
+            ].map((step) => (
+              <div
+                key={step.num}
+                className="group relative overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.03] backdrop-blur-xl p-6 transition-all duration-300 hover:-translate-y-2 hover:border-indigo-500/40 hover:shadow-[0_0_40px_rgba(99,102,241,0.12)]"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/[0.04] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                <div className="relative">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-sm font-bold text-indigo-400">
+                      {step.num}
+                    </div>
+                    <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center group-hover:bg-indigo-500/20 group-hover:scale-105 transition-all duration-300">
+                      <step.icon className="w-5 h-5 text-indigo-400" />
+                    </div>
+                  </div>
+                  <h3 className="text-lg font-semibold text-foreground mb-2">{step.title}</h3>
+                  <p className="text-muted-foreground text-sm leading-relaxed">{step.desc}</p>
+                </div>
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Code-Free Strategy Builder</h3>
-              <p className="text-muted-foreground text-sm">
-                Use our NLP engine to type your strategy in plain English. We instantly generate the Python, backtest it, and deploy it to your personal broker.
-              </p>
-            </div>
-
-            <div className="group relative overflow-hidden rounded-2xl bg-card/50 backdrop-blur border border-border p-6 transition-all duration-300 hover:-translate-y-2 hover:border-blue-500/50 hover:shadow-[0_0_30px_rgba(59,130,246,0.15)]">
-              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
-                <LineChart className="w-6 h-6 text-primary" />
-              </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Pro-Grade Execution</h3>
-              <p className="text-muted-foreground text-sm">
-                Monitor live charts and execute simulated paper-trades on our Live Terminal before risking real capital on the open market.
-              </p>
-            </div>
-
-            <div className="group relative overflow-hidden rounded-2xl bg-card/50 backdrop-blur border border-border p-6 transition-all duration-300 hover:-translate-y-2 hover:border-blue-500/50 hover:shadow-[0_0_30px_rgba(59,130,246,0.15)]">
-              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
-                <Store className="w-6 h-6 text-primary" />
-              </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Subscribe to Verified RIAs</h3>
-              <p className="text-muted-foreground text-sm">
-                Don&apos;t want to build? Browse the Tradeky Marketplace to subscribe to regulatory-compliant strategies built by top-tier wealth managers, executed automatically on your account.
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-12 flex justify-center">
-            <Link to="/marketplace">
-              <Button variant="ghost" size="lg" className="border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 hover:border-blue-500/50 hover:shadow-[0_0_20px_rgba(59,130,246,0.2)] transition-all duration-300">
-                Explore the Marketplace →
-              </Button>
-            </Link>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* Final CTA */}
-      <section className="py-24 relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-b from-card/30 to-background" />
+      {/* ═══════════════ SECTION 5: FINAL CTA ═══════════════ */}
+      <section className="relative py-28 overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/60 via-background to-background" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[40rem] h-[40rem] bg-blue-600/[0.08] rounded-full blur-[200px]" />
+
         <div className="relative max-w-3xl mx-auto px-6 text-center">
-          <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-            Stop manually routing trades. Automate your RIA practice today.
+          <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-4">
+            <span className="text-foreground">Stop trading manually. </span>
+            <span className="bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">Start executing like a machine.</span>
           </h2>
-          <p className="text-muted-foreground mb-8">
-            Join wealth managers who scale execution without scaling headcount.
+          <p className="text-muted-foreground mb-10 text-lg">
+            Whether you are an RIA or a retail trader — the platform is the same, the edge is yours.
           </p>
           <Link to="/auth?mode=signup">
-            <Button size="lg" className="btn-glow">
-              Contact Sales for Pilot Access
+            <Button size="lg" className="shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 transition-shadow duration-300 text-base px-8 py-6">
+              Launch the Platform
               <ArrowRight className="w-5 h-5 ml-2" />
             </Button>
           </Link>
