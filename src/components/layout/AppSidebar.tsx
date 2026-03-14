@@ -37,12 +37,7 @@ const navItems = [
     path: "/marketplace",
     description: "Browse strategies"
   },
-  { 
-    title: "Community", 
-    icon: Users, 
-    path: "/community",
-    description: "Discussion"
-  },
+  // { title: "Community", icon: Users, path: "/community", description: "Discussion" },
   { 
     title: "Live Terminal", 
     icon: Monitor, 

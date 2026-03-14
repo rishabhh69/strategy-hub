@@ -104,9 +104,11 @@ export default function LandingPage() {
             <Link to="/terminal" className="text-muted-foreground hover:text-foreground transition-colors">
               Live Terminal
             </Link>
+            {/* Community link commented out
             <Link to="/community" className="text-muted-foreground hover:text-foreground transition-colors">
               Community
             </Link>
+            */}
           </div>
 
           {/* Render nothing until we know auth state — prevents wrong buttons flashing */}

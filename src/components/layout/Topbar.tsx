@@ -376,6 +376,9 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                   <Bot className="w-5 h-5 text-primary" />
                   Deployed Strategies
                 </DialogTitle>
+                <p className="text-xs text-muted-foreground font-normal mt-1">
+                  View and stop strategies on your broker. After a trade is executed on the broker, the strategy stops automatically.
+                </p>
               </DialogHeader>
               <div className="mt-2">
                 {deployedStrategiesLoading ? (
@@ -385,6 +388,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                 ) : (
                   <ul className="space-y-3 max-h-[60vh] overflow-y-auto">
                     {liveDeployments.map((d) => {
+                      const tradeOnBroker = d.order_placed ? "Executed" : d.status === "running" ? "Not yet" : "Stopped";
                       const executionStatus = d.order_placed
                         ? "Executed"
                         : d.status === "running"
@@ -393,6 +397,11 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                       const capitalStr = d.capital != null && !Number.isNaN(d.capital)
                         ? `₹${Number(d.capital).toLocaleString("en-IN")}`
                         : null;
+                      const quantityText = d.order_placed
+                        ? "Filled at market"
+                        : capitalStr
+                          ? "Buy: at market (qty from capital/price). Sell: full position."
+                          : "At market";
                       return (
                         <li
                           key={d.deployment_id}
@@ -402,14 +411,17 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                             <div className="min-w-0 flex-1">
                               <p className="text-sm font-medium text-foreground truncate">{d.strategy_name || "Strategy"}</p>
                               <p className="text-xs text-muted-foreground mt-0.5">
-                                Accounts: {d.target_accounts || "Personal Angel One"}
+                                Operating on accounts: {d.target_accounts || "Personal Angel One"}
                               </p>
                               <p className="text-[10px] text-muted-foreground/70 mt-1">
                                 {d.symbol && <span className="mr-2">Symbol: {d.symbol}</span>}
                                 {capitalStr && <span>Capital: {capitalStr}</span>}
                               </p>
                               <p className="text-[10px] mt-1">
-                                Quantity: {d.order_placed ? "Filled at market" : capitalStr ? `Buy: at market from capital (max shares = capital/price). Sell: full position.` : "At market"}
+                                Quantity: {quantityText}
+                              </p>
+                              <p className="text-[10px] text-muted-foreground/70 mt-0.5">
+                                Trade on broker: <span className={d.order_placed ? "text-profit font-medium" : ""}>{tradeOnBroker}</span>
                               </p>
                             </div>
                             <div className="flex flex-col items-end gap-1.5 shrink-0">

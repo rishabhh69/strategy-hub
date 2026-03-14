@@ -10,7 +10,7 @@ import Marketplace from "./pages/Marketplace";
 import StrategyDetail from "./pages/StrategyDetail";
 import SavedStrategies from "./pages/SavedStrategies";
 import SavedStrategyDetail from "./pages/SavedStrategyDetail";
-import Community from "./pages/Community";
+// import Community from "./pages/Community"; // Commented out
 import Settings from "./pages/Settings";
 import Profile from "./pages/Profile";
 import Auth from "./pages/Auth";
@@ -41,7 +41,7 @@ const App = () => (
             <Route path="/marketplace/strategy/:id" element={<StrategyDetail />} />
             <Route path="/saved-strategies" element={<SavedStrategies />} />
             <Route path="/saved-strategies/:id" element={<SavedStrategyDetail />} />
-            <Route path="/community" element={<Community />} />
+            {/* <Route path="/community" element={<Community />} /> */}
             <Route path="/settings" element={<Settings />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/terminal" element={<LiveTerminal />} />

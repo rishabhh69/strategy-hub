@@ -1972,8 +1972,8 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
                     _deployment_position_state[deployment_id] = True
                     logging.info("Engine deployment %s: BUY placed qty=%s; stopping deployment (one-shot).", deployment_id[:8], order_qty)
                 if _sb_ok():
-                    _sb_update("live_deployments", {"order_placed": True, "executed_at": datetime.utcnow().isoformat() + "Z"}, {"deployment_id": deployment_id})
-                break  # Stop after first order so engine does not fire again
+                    _sb_update("live_deployments", {"order_placed": True, "executed_at": datetime.utcnow().isoformat() + "Z", "status": "stopped"}, {"deployment_id": deployment_id})
+                break  # Stop after first order so strategy auto-stops
             else:
                 clients = _sb_get(
                     "client_accounts",
@@ -2006,8 +2006,8 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
                     _deployment_position_state[deployment_id] = False
                     logging.info("Engine deployment %s: SELL placed qty=%s; stopping deployment (one-shot).", deployment_id[:8], order_qty)
                 if _sb_ok():
-                    _sb_update("live_deployments", {"order_placed": True, "executed_at": datetime.utcnow().isoformat() + "Z"}, {"deployment_id": deployment_id})
-                break  # Stop after first order so engine does not fire again
+                    _sb_update("live_deployments", {"order_placed": True, "executed_at": datetime.utcnow().isoformat() + "Z", "status": "stopped"}, {"deployment_id": deployment_id})
+                break  # Stop after first order so strategy auto-stops
     except asyncio.CancelledError:
         pass
     finally:
