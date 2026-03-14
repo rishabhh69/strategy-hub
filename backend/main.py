@@ -1682,18 +1682,32 @@ class DeployStrategyRequest(BaseModel):
 async def deploy_strategy_live(req: DeployStrategyRequest):
     """
     Save strategy as 'Live' and push the strategy code to the deployment.
-    Strategy Monitor runs this code every tick and places a broker order only when
-    all strategy conditions are met (e.g. last bar signal == 1 and no open position).
+    Any user can deploy to their own broker account, or (if they have client_accounts)
+    to all their clients' accounts. The Strategy Monitor runs this code on the market
+    data every ~2 minutes and places a broker order only when ALL of the following hold:
+    - The strategy's Python code defines a callable 'strategy(df)' and returns a DataFrame
+      with 'signal' and/or 'position' (1=buy, -1=sell, 0=hold).
+    - The last bar's signal/position indicates buy or sell.
+    - For BUY: no open position in that symbol (no double-buy).
+    - For SELL: an open position exists (no sell without position).
+    Orders are then sent either to the user's single broker account or to all active
+    client accounts (RIA bulk), depending on whether client_accounts exist for this user.
     """
     if not _sb_ok():
         raise HTTPException(503, "Supabase is unreachable. Cannot save deployment.")
+    logic = (req.strategy_logic or "").strip()
+    if not logic or "def strategy(" not in logic:
+        raise HTTPException(
+            400,
+            "Strategy logic must define a callable 'strategy(df)' function (e.g. from backtest). Run a backtest first and deploy from Strategy Studio.",
+        )
     payload = {
         "user_id": req.user_id,
         "broker_name": req.broker_name,
         "strategy_id": req.strategy_id,
         "strategy_name": req.strategy_name,
         "symbol": req.symbol,
-        "strategy_logic": req.strategy_logic,
+        "strategy_logic": logic,
         "capital": float(req.capital),
         "status": "Live",
     }
@@ -1744,13 +1758,21 @@ def _run_strategy_monitor() -> None:
             df = df[["date", "open", "high", "low", "close", "volume"]]
             g: Dict[str, Any] = {"__builtins__": builtins, "pd": pd, "np": np, "math": math}
             loc: Dict[str, Any] = {}
-            exec(strategy_logic, g, loc)  # noqa: S102
-            if "strategy" not in loc:
+            try:
+                exec(strategy_logic, g, loc)  # noqa: S102
+            except Exception as exec_err:  # noqa: BLE001
+                logging.warning("Strategy monitor: strategy code error for deployment %s: %s", dep.get("id"), exec_err)
                 continue
-            result_df = loc["strategy"](df.copy())
+            if "strategy" not in loc or not callable(loc["strategy"]):
+                continue
+            try:
+                result_df = loc["strategy"](df.copy())
+            except Exception as run_err:  # noqa: BLE001
+                logging.warning("Strategy monitor: strategy(df) error for deployment %s: %s", dep.get("id"), run_err)
+                continue
             if result_df is None or len(result_df) == 0:
                 continue
-            # Determine trade direction from strategy output
+            # Execute only when strategy conditions are met: last bar must signal buy or sell
             last = result_df.iloc[-1]
             signal = last.get("signal", 0)
             position = last.get("position", 0)
@@ -1793,6 +1815,7 @@ def _run_strategy_monitor() -> None:
 
             order_qty = max(1, int(capital / price)) if want_buy else abs(open_qty)
 
+            # All conditions met: strategy signaled and position state allows. Place order(s) safely.
             # RIA with active client_accounts: place bulk order; else solo order
             clients = _sb_get(
                 "client_accounts",

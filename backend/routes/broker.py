@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -614,8 +615,13 @@ async def place_bulk_order_impl(
     "price": price,
   }
 
+  # Telemetry: batch latency (perf_counter around concurrent dispatch)
+  t0 = time.perf_counter()
+  # Each task runs independently; one account failure does not block others (return_exceptions=True).
   tasks = [execute_client_order(row, order_details, reference_price) for row in rows]
   results = await asyncio.gather(*tasks, return_exceptions=True)
+  t1 = time.perf_counter()
+  batch_latency_ms = (t1 - t0) * 1000
 
   successful = [{"client_id": r.get("client_id"), "client_name": r.get("client_name"), "orderid": r.get("orderid")} for r in results if isinstance(r, dict) and r.get("success")]
   failed: List[Dict[str, Any]] = []
@@ -631,11 +637,24 @@ async def place_bulk_order_impl(
     else:
       details.append({"success": False, "error": str(r)})
 
+  total = len(rows)
+  success_count = len(successful)
+  failed_count = len(failed)
+  logger.info(
+    "[Engine] %d Orders Dispatched. Success: %d. Failed: %d. Total Batch Latency: %.0fms.",
+    total, success_count, failed_count, batch_latency_ms,
+  )
+  print(
+    "[Engine] %d Orders Dispatched. Success: %d. Failed: %d. Total Batch Latency: %.0fms."
+    % (total, success_count, failed_count, batch_latency_ms)
+  )
+
   return {
     "ok": True,
-    "total": len(rows),
-    "success_count": len(successful),
-    "failed_count": len(failed),
+    "total": total,
+    "success_count": success_count,
+    "failed_count": failed_count,
+    "batch_latency_ms": round(batch_latency_ms, 2),
     "successful": successful,
     "failed": failed,
     "details": details,
