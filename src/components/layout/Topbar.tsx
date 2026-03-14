@@ -1,4 +1,4 @@
-import { User, Crown, Bell, Menu, LogOut, CheckCheck, Inbox } from "lucide-react";
+import { User, Crown, Bell, Menu, LogOut, CheckCheck, Inbox, Bot, Square } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +35,13 @@ interface Notification {
   message:    string;
   is_read:    boolean;
   created_at: string;
+}
+
+interface LiveDeployment {
+  deployment_id: string;
+  strategy_name: string;
+  target_accounts: string;
+  status: string;
 }
 
 interface TopbarProps {
@@ -96,6 +109,59 @@ export function Topbar({ onMenuClick }: TopbarProps) {
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
 
+  // ── Live Bots (engine deployments) ─────────────────────────────────────────
+  const [liveBotsOpen, setLiveBotsOpen] = useState(false);
+  const [liveDeployments, setLiveDeployments] = useState<LiveDeployment[]>([]);
+  const [liveBotsLoading, setLiveBotsLoading] = useState(false);
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
+
+  const fetchLiveDeployments = useCallback(async (uid: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/engine/live-deployments?user_id=${encodeURIComponent(uid)}`);
+      if (res.ok) setLiveDeployments(await res.json());
+      else setLiveDeployments([]);
+    } catch {
+      setLiveDeployments([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (liveBotsOpen && userId) {
+      setLiveBotsLoading(true);
+      fetchLiveDeployments(userId).finally(() => setLiveBotsLoading(false));
+    }
+  }, [liveBotsOpen, userId, fetchLiveDeployments]);
+
+  // Poll for active bots count so the green dot shows in navbar
+  useEffect(() => {
+    if (!userId) return;
+    fetchLiveDeployments(userId);
+    const id = setInterval(() => fetchLiveDeployments(userId), 30_000);
+    return () => clearInterval(id);
+  }, [userId, fetchLiveDeployments]);
+
+  const handleStopDeployment = async (deploymentId: string) => {
+    setStoppingId(deploymentId);
+    try {
+      const res = await fetch(`${API_BASE}/api/engine/stop-deployment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deployment_id: deploymentId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        toast.success("Deployment halted successfully.");
+        if (userId) fetchLiveDeployments(userId);
+      } else {
+        toast.error(data?.message || "Failed to stop deployment.");
+      }
+    } catch {
+      toast.error("Failed to stop deployment.");
+    } finally {
+      setStoppingId(null);
+    }
+  };
+
   const handleMarkAllRead = async () => {
     if (!userId || unreadCount === 0) return;
     setMarking(true);
@@ -154,6 +220,20 @@ export function Topbar({ onMenuClick }: TopbarProps) {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Live Bots — left of Upgrade to Pro */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="hidden sm:flex gap-2 relative"
+            onClick={() => setLiveBotsOpen(true)}
+          >
+            {liveDeployments.length > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-profit animate-pulse" />
+            )}
+            <Bot className="w-4 h-4 text-muted-foreground" />
+            <span className="text-sm">Live Bots</span>
+          </Button>
+
           {/* Upgrade Button */}
           <Button className="btn-glow bg-gradient-to-r from-primary to-accent hidden sm:flex">
             <Crown className="w-4 h-4 mr-2" />
@@ -282,6 +362,51 @@ export function Topbar({ onMenuClick }: TopbarProps) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {/* Live Bots Modal */}
+          <Dialog open={liveBotsOpen} onOpenChange={setLiveBotsOpen}>
+            <DialogContent className="sm:max-w-md border-border bg-card">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Bot className="w-5 h-5 text-primary" />
+                  Live Bots
+                </DialogTitle>
+              </DialogHeader>
+              <div className="mt-2">
+                {liveBotsLoading ? (
+                  <p className="text-sm text-muted-foreground">Loading…</p>
+                ) : liveDeployments.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No active live deployments. Deploy from Strategy Studio.</p>
+                ) : (
+                  <ul className="space-y-3">
+                    {liveDeployments.map((d) => (
+                      <li
+                        key={d.deployment_id}
+                        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 p-3 rounded-lg border border-border bg-muted/20"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate">{d.strategy_name || "Strategy"}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Live on: {d.target_accounts || "Personal Angel One"}
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="shrink-0 gap-1.5"
+                          disabled={stoppingId === d.deployment_id}
+                          onClick={() => handleStopDeployment(d.deployment_id)}
+                        >
+                          <Square className="w-3.5 h-3.5" />
+                          {stoppingId === d.deployment_id ? "Stopping…" : "Stop Process"}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
     </div>

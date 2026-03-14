@@ -148,12 +148,7 @@ async def _lifespan(app: FastAPI):
         timezone=ZoneInfo("Asia/Kolkata"),
         id="daily_broker_refresh",
     )
-    _broker_scheduler.add_job(
-        _run_strategy_monitor,
-        trigger="interval",
-        minutes=2,
-        id="strategy_monitor",
-    )
+    # Live strategy execution is per-deployment via asyncio tasks (see deploy_strategy_live + _run_single_deployment_loop)
     _broker_scheduler.add_job(
         _strategy_worker_terminal,
         trigger="interval",
@@ -161,6 +156,18 @@ async def _lifespan(app: FastAPI):
         id="strategy_worker",
     )
     _broker_scheduler.start()
+    # Restore running live deployments (tasks were lost on restart)
+    try:
+        running = _sb_get("live_deployments", {"status": "eq.running"}, limit=200)
+        if running:
+            for row in running:
+                did = (row.get("deployment_id") or "").strip()
+                if did and did not in active_live_deployments:
+                    t = asyncio.create_task(_run_single_deployment_loop(did))
+                    active_live_deployments[did] = t
+            logging.info("Engine: restored %d running live deployment(s)", len(running))
+    except Exception as e:  # noqa: BLE001
+        logging.warning("Engine: could not restore live deployments: %s", e)
     yield
     if _broker_scheduler:
         _broker_scheduler.shutdown(wait=False)
@@ -1191,6 +1198,13 @@ _RUNNING_BOTS: Dict[str, asyncio.Task] = {}   # bot_id → asyncio Task
 _BOT_META:     Dict[str, Dict]         = {}   # bot_id → {user_id, symbol, qty, strategy_id, title, started_at}
 
 # ---------------------------------------------------------------------------
+# Live engine: per-deployment position state + active task registry
+# Ensures we never fire continuous buys when price hovers above threshold.
+# ---------------------------------------------------------------------------
+_deployment_position_state: Dict[str, bool] = {}   # deployment_id -> in_position (True = have open long)
+active_live_deployments: Dict[str, asyncio.Task] = {}   # deployment_id -> asyncio.Task (for cancel)
+
+# ---------------------------------------------------------------------------
 # _SAFE_BUILTINS — OWASP A03 Injection: restricted builtins for exec() sandbox
 # Used by /backtest and bot_worker. Blocks open, import, eval, exec, globals, etc.
 # ---------------------------------------------------------------------------
@@ -1648,8 +1662,8 @@ async def delete_saved_strategy(
 
 
 # ---------------------------------------------------------------------------
-# Live strategy deployment: save as 'Live' so Strategy Monitor can watch and place orders when conditions are met.
-# Create table in Supabase SQL Editor if missing:
+# Live strategy deployment: save as 'Live'; engine runs per-deployment task with position state guardrail.
+# Create tables in Supabase SQL Editor if missing:
 #   create table if not exists public.strategy_deployments (
 #     id uuid primary key default gen_random_uuid(),
 #     user_id uuid not null references auth.users(id) on delete cascade,
@@ -1662,6 +1676,15 @@ async def delete_saved_strategy(
 #     status text not null default 'Live',
 #     created_at timestamptz default now(),
 #     updated_at timestamptz default now()
+#   );
+#   create table if not exists public.live_deployments (
+#     deployment_id text primary key,
+#     strategy_deployment_id uuid not null,
+#     user_id text not null,
+#     strategy_name text,
+#     target_accounts text,
+#     status text not null default 'running',
+#     created_at timestamptz default now()
 #   );
 # ---------------------------------------------------------------------------
 class DeployStrategyRequest(BaseModel):
@@ -1718,7 +1741,266 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
     row = _sb_insert("strategy_deployments", payload)
     if not row:
         raise HTTPException(503, "Failed to save deployment to Supabase.")
-    return {"ok": True, "id": row.get("id"), "status": "Live", "message": "Strategy is live. Monitor will evaluate and place orders when conditions are met."}
+    strategy_deployment_id = row.get("id")
+    if not strategy_deployment_id:
+        return {"ok": True, "id": None, "status": "Live", "message": "Strategy is live."}
+
+    # Target accounts label for UI
+    clients = _sb_get(
+        "client_accounts",
+        filters={"ria_user_id": f"eq.{req.user_id}", "status": "eq.Active"},
+        select="id",
+        limit=500,
+    )
+    client_count = len(clients) if clients else 0
+    target_accounts = f"{client_count} Client Accounts" if client_count > 0 else "Personal Angel One"
+
+    deployment_id = str(uuid.uuid4())
+    live_row = _sb_insert("live_deployments", {
+        "deployment_id": deployment_id,
+        "strategy_deployment_id": strategy_deployment_id,
+        "user_id": req.user_id,
+        "strategy_name": req.strategy_name[:256] if req.strategy_name else "Live strategy",
+        "target_accounts": target_accounts,
+        "status": "running",
+    })
+    if not live_row:
+        return {"ok": True, "id": strategy_deployment_id, "deployment_id": None, "status": "Live", "message": "Strategy saved; engine table unavailable. Restart or check DB."}
+
+    task = asyncio.create_task(_run_single_deployment_loop(deployment_id))
+    active_live_deployments[deployment_id] = task
+    return {"ok": True, "id": strategy_deployment_id, "deployment_id": deployment_id, "status": "Live", "message": "Strategy is live. Engine will evaluate and place orders when conditions are met."}
+
+
+# ---------------------------------------------------------------------------
+# Engine process management: list running deployments, stop by deployment_id
+# ---------------------------------------------------------------------------
+@app.get("/api/engine/live-deployments")
+async def get_live_deployments(user_id: str = Query(..., min_length=1, max_length=128)):
+    """Return live deployments for the given user with status='running' (for navbar/modal)."""
+    if not _sb_ok():
+        return []
+    rows = _sb_get("live_deployments", {"user_id": f"eq.{user_id}", "status": "eq.running"}, limit=100)
+    if not rows:
+        return []
+    return [{"deployment_id": r.get("deployment_id"), "strategy_name": r.get("strategy_name"), "target_accounts": r.get("target_accounts"), "status": r.get("status")} for r in rows]
+
+
+@app.get("/api/engine/deployments")
+async def get_all_deployments(user_id: str = Query(..., min_length=1, max_length=128)):
+    """Return all deployed strategies for the given user (running and stopped) for the Deployed Strategies page."""
+    if not _sb_ok():
+        return []
+    rows = _sb_get("live_deployments", {"user_id": f"eq.{user_id}"}, limit=100)
+    if not rows:
+        return []
+    return [
+        {
+            "deployment_id": r.get("deployment_id"),
+            "strategy_name": r.get("strategy_name"),
+            "target_accounts": r.get("target_accounts"),
+            "status": r.get("status") or "stopped",
+            "created_at": r.get("created_at"),
+        }
+        for r in rows
+    ]
+
+
+class StopDeploymentRequest(BaseModel):
+    deployment_id: str = Field(..., min_length=1, max_length=64)
+
+
+@app.post("/api/engine/stop-deployment")
+async def stop_deployment(req: StopDeploymentRequest):
+    """Cancel the running task for this deployment and set status to 'stopped' in DB."""
+    deployment_id = (req.deployment_id or "").strip()
+    if not deployment_id:
+        raise HTTPException(400, "deployment_id is required.")
+    task = active_live_deployments.get(deployment_id)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        active_live_deployments.pop(deployment_id, None)
+        _deployment_position_state.pop(deployment_id, None)
+    if _sb_ok():
+        _sb_update("live_deployments", {"status": "stopped"}, {"deployment_id": deployment_id})
+    return {"ok": True, "deployment_id": deployment_id, "status": "stopped", "message": "Deployment halted successfully."}
+
+
+async def _run_single_deployment_loop(deployment_id: str) -> None:
+    """
+    Per-deployment async loop: run strategy every ~2 min with position state guardrail.
+    BUY only when state['in_position'] is False; SELL only when True. Prevents continuous buys.
+    """
+    from routes.broker import get_angel_positions, place_order_impl, place_bulk_order_impl
+    try:
+        while True:
+            await asyncio.sleep(120)
+            try:
+                live_rows = _sb_get("live_deployments", {"deployment_id": f"eq.{deployment_id}"}, limit=1)
+                if not live_rows or (live_rows[0].get("status") or "").strip().lower() != "running":
+                    break
+                live = live_rows[0]
+                strat_id = live.get("strategy_deployment_id")
+                if not strat_id:
+                    break
+                dep_rows = _sb_get("strategy_deployments", {"id": f"eq.{strat_id}"}, limit=1)
+                if not dep_rows:
+                    break
+                dep = dep_rows[0]
+            except Exception:
+                break
+
+            user_id = dep.get("user_id")
+            broker_name = dep.get("broker_name")
+            symbol = (dep.get("symbol") or "").strip()
+            strategy_logic = (dep.get("strategy_logic") or "").strip()
+            capital = float(dep.get("capital") or 0)
+            if not user_id or not symbol or not strategy_logic or capital <= 0:
+                continue
+
+            sym = normalise(symbol)
+            candles = _yahoo_v8(sym, range_="5d", interval="1d")
+            if not candles or len(candles) < 2:
+                continue
+            df = pd.DataFrame(candles)
+            df["date"] = pd.to_datetime(df["time"], unit="s")
+            df = df.rename(columns={"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"})
+            df = df[["date", "open", "high", "low", "close", "volume"]]
+            g: Dict[str, Any] = {"__builtins__": builtins, "pd": pd, "np": np, "math": math}
+            loc: Dict[str, Any] = {}
+            try:
+                exec(strategy_logic, g, loc)  # noqa: S102
+            except Exception as exec_err:  # noqa: BLE001
+                logging.warning("Engine deployment %s: strategy code error: %s", deployment_id[:8], exec_err)
+                continue
+            if "strategy" not in loc or not callable(loc["strategy"]):
+                continue
+            try:
+                result_df = loc["strategy"](df.copy())
+            except Exception as run_err:  # noqa: BLE001
+                logging.warning("Engine deployment %s: strategy(df) error: %s", deployment_id[:8], run_err)
+                continue
+            if result_df is None or len(result_df) == 0:
+                continue
+
+            last = result_df.iloc[-1]
+            signal = last.get("signal", 0)
+            position = last.get("position", 0)
+            try:
+                sig_val = int(signal) if signal is not None else 0
+                pos_val = int(position) if position is not None else 0
+            except (TypeError, ValueError):
+                sig_val, pos_val = 0, 0
+            want_buy = (sig_val == 1 or pos_val == 1)
+            want_sell = (sig_val == -1 or pos_val == -1)
+            if not want_buy and not want_sell:
+                continue
+
+            positions = get_angel_positions(user_id, broker_name)
+            tradingsymbol_like = symbol.upper().replace(".NS", "").replace(" ", "")
+            open_qty = 0
+            for pos in positions:
+                ts = (pos.get("tradingsymbol") or pos.get("symbol") or "").upper().replace(" ", "")
+                netqty = int(pos.get("netqty") or pos.get("quantity") or 0)
+                if (tradingsymbol_like in ts or ts in tradingsymbol_like) and netqty != 0:
+                    open_qty = netqty
+                    break
+
+            # Position state guardrail: init from broker if not set; only BUY when not in_position, SELL when in_position
+            if deployment_id not in _deployment_position_state:
+                _deployment_position_state[deployment_id] = (open_qty != 0)
+            in_position = _deployment_position_state[deployment_id]
+
+            if want_buy and in_position:
+                continue
+            if want_sell and not in_position:
+                continue
+
+            txn_type = "BUY" if want_buy else "SELL"
+            quote = _yahoo_v8_quote(sym)
+            price = float(quote.get("price", 0)) if quote else 0
+            if not price or price <= 0:
+                continue
+            angel_sym = dep.get("angel_symbol") or symbol
+            token_val = dep.get("token") or ""
+            order_qty = max(1, int(capital / price)) if want_buy else abs(open_qty)
+
+            if want_buy:
+                clients = _sb_get(
+                    "client_accounts",
+                    filters={"ria_user_id": f"eq.{user_id}", "status": "eq.Active"},
+                    select="id",
+                    limit=1,
+                )
+                if clients and angel_sym and token_val:
+                    try:
+                        await place_bulk_order_impl(
+                            ria_user_id=user_id,
+                            tradingsymbol=angel_sym,
+                            symboltoken=token_val,
+                            transaction_type=txn_type,
+                            order_type="MARKET",
+                            reference_price=price,
+                            exchange="NSE",
+                            price=None,
+                        )
+                        _deployment_position_state[deployment_id] = True
+                        logging.info("Engine deployment %s: bulk BUY placed; stopping deployment (one-shot).", deployment_id[:8])
+                    except Exception as bulk_err:  # noqa: BLE001
+                        logging.warning("Engine bulk order failed %s: %s", deployment_id[:8], bulk_err)
+                else:
+                    await asyncio.to_thread(
+                        place_order_impl,
+                        user_id, broker_name, symbol, order_qty, txn_type, "MARKET",
+                        angel_symbol=angel_sym or None, token=token_val or None,
+                    )
+                    _deployment_position_state[deployment_id] = True
+                    logging.info("Engine deployment %s: BUY placed qty=%s; stopping deployment (one-shot).", deployment_id[:8], order_qty)
+                break  # Stop after first order so engine does not fire again
+            else:
+                clients = _sb_get(
+                    "client_accounts",
+                    filters={"ria_user_id": f"eq.{user_id}", "status": "eq.Active"},
+                    select="id",
+                    limit=1,
+                )
+                if clients and angel_sym and token_val:
+                    try:
+                        await place_bulk_order_impl(
+                            ria_user_id=user_id,
+                            tradingsymbol=angel_sym,
+                            symboltoken=token_val,
+                            transaction_type=txn_type,
+                            order_type="MARKET",
+                            reference_price=price,
+                            exchange="NSE",
+                            price=None,
+                        )
+                        _deployment_position_state[deployment_id] = False
+                        logging.info("Engine deployment %s: bulk SELL placed; stopping deployment (one-shot).", deployment_id[:8])
+                    except Exception as bulk_err:  # noqa: BLE001
+                        logging.warning("Engine bulk order failed %s: %s", deployment_id[:8], bulk_err)
+                else:
+                    await asyncio.to_thread(
+                        place_order_impl,
+                        user_id, broker_name, symbol, order_qty, txn_type, "MARKET",
+                        angel_symbol=angel_sym or None, token=token_val or None,
+                    )
+                    _deployment_position_state[deployment_id] = False
+                    logging.info("Engine deployment %s: SELL placed qty=%s; stopping deployment (one-shot).", deployment_id[:8], order_qty)
+                break  # Stop after first order so engine does not fire again
+    except asyncio.CancelledError:
+        pass
+    finally:
+        active_live_deployments.pop(deployment_id, None)
+        _deployment_position_state.pop(deployment_id, None)
+        if _sb_ok():
+            _sb_update("live_deployments", {"status": "stopped"}, {"deployment_id": deployment_id})
+        logging.info("Engine deployment %s stopped", deployment_id[:8])
 
 
 def _run_strategy_monitor() -> None:
@@ -1798,10 +2080,14 @@ def _run_strategy_monitor() -> None:
                     open_qty = netqty
                     break
 
-            # BUY only when no open position; SELL only when an open position exists
-            if want_buy and open_qty != 0:
+            # Position state guardrail (sync monitor): prevent continuous buys when price hovers above threshold
+            dep_id_sync = str(dep.get("id") or "")
+            if dep_id_sync and dep_id_sync not in _deployment_position_state:
+                _deployment_position_state[dep_id_sync] = (open_qty != 0)
+            in_position_sync = _deployment_position_state.get(dep_id_sync, open_qty != 0)
+            if want_buy and in_position_sync:
                 continue
-            if want_sell and open_qty == 0:
+            if want_sell and not in_position_sync:
                 continue
 
             txn_type = "BUY" if want_buy else "SELL"
@@ -1844,6 +2130,8 @@ def _run_strategy_monitor() -> None:
                             "Strategy monitor placed bulk %s for RIA user=%s symbol=%s success=%s failed=%s",
                             txn_type, user_id[:8], symbol, result.get("success_count"), result.get("failed_count"),
                         )
+                        if dep_id_sync:
+                            _deployment_position_state[dep_id_sync] = (txn_type == "BUY")
                     finally:
                         loop.close()
                 except Exception as bulk_err:  # noqa: BLE001
@@ -1854,6 +2142,8 @@ def _run_strategy_monitor() -> None:
                     angel_symbol=angel_sym or None, token=token_val or None,
                 )
                 logging.info("Strategy monitor placed %s for user=%s symbol=%s qty=%s", txn_type, user_id[:8], symbol, order_qty)
+                if dep_id_sync:
+                    _deployment_position_state[dep_id_sync] = (txn_type == "BUY")
         except Exception as e:  # noqa: BLE001
             logging.warning("Strategy monitor tick failed for deployment %s: %s", dep.get("id"), e)
 
