@@ -40,8 +40,13 @@ interface Notification {
 interface LiveDeployment {
   deployment_id: string;
   strategy_name: string;
+  symbol?: string | null;
+  capital?: number | null;
   target_accounts: string;
   status: string;
+  order_placed?: boolean;
+  executed_at?: string | null;
+  created_at?: string;
 }
 
 interface TopbarProps {
@@ -109,15 +114,15 @@ export function Topbar({ onMenuClick }: TopbarProps) {
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
 
-  // ── Live Bots (engine deployments) ─────────────────────────────────────────
-  const [liveBotsOpen, setLiveBotsOpen] = useState(false);
+  // ── Deployed Strategies (engine deployments modal) ───────────────────────────
+  const [deployedStrategiesOpen, setDeployedStrategiesOpen] = useState(false);
   const [liveDeployments, setLiveDeployments] = useState<LiveDeployment[]>([]);
-  const [liveBotsLoading, setLiveBotsLoading] = useState(false);
+  const [deployedStrategiesLoading, setDeployedStrategiesLoading] = useState(false);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
 
   const fetchLiveDeployments = useCallback(async (uid: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/engine/live-deployments?user_id=${encodeURIComponent(uid)}`);
+      const res = await fetch(`${API_BASE}/api/engine/deployments?user_id=${encodeURIComponent(uid)}`);
       if (res.ok) setLiveDeployments(await res.json());
       else setLiveDeployments([]);
     } catch {
@@ -126,13 +131,13 @@ export function Topbar({ onMenuClick }: TopbarProps) {
   }, []);
 
   useEffect(() => {
-    if (liveBotsOpen && userId) {
-      setLiveBotsLoading(true);
-      fetchLiveDeployments(userId).finally(() => setLiveBotsLoading(false));
+    if (deployedStrategiesOpen && userId) {
+      setDeployedStrategiesLoading(true);
+      fetchLiveDeployments(userId).finally(() => setDeployedStrategiesLoading(false));
     }
-  }, [liveBotsOpen, userId, fetchLiveDeployments]);
+  }, [deployedStrategiesOpen, userId, fetchLiveDeployments]);
 
-  // Poll for active bots count so the green dot shows in navbar
+  // Poll deployments so green-dot indicator stays up to date
   useEffect(() => {
     if (!userId) return;
     fetchLiveDeployments(userId);
@@ -151,7 +156,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
         toast.success("Deployment halted successfully.");
-        if (userId) fetchLiveDeployments(userId);
+        if (userId) void fetchLiveDeployments(userId);
       } else {
         toast.error(data?.message || "Failed to stop deployment.");
       }
@@ -220,21 +225,21 @@ export function Topbar({ onMenuClick }: TopbarProps) {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Live Bots — left of Upgrade to Pro */}
+          {/* Deployed Strategies — next to Upgrade to Pro */}
           <Button
             variant="ghost"
             size="sm"
             className="hidden sm:flex gap-2 relative"
-            onClick={() => setLiveBotsOpen(true)}
+            onClick={() => setDeployedStrategiesOpen(true)}
           >
-            {liveDeployments.length > 0 && (
+            {liveDeployments.some(d => d.status === "running") && (
               <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-profit animate-pulse" />
             )}
             <Bot className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm">Live Bots</span>
+            <span className="text-sm">Deployed Strategies</span>
           </Button>
 
-          {/* Upgrade Button */}
+          {/* Upgrade to Pro */}
           <Button className="btn-glow bg-gradient-to-r from-primary to-accent hidden sm:flex">
             <Crown className="w-4 h-4 mr-2" />
             Upgrade to Pro
@@ -363,45 +368,77 @@ export function Topbar({ onMenuClick }: TopbarProps) {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Live Bots Modal */}
-          <Dialog open={liveBotsOpen} onOpenChange={setLiveBotsOpen}>
+          {/* Deployed Strategies Modal (all deployments, stop running) */}
+          <Dialog open={deployedStrategiesOpen} onOpenChange={setDeployedStrategiesOpen}>
             <DialogContent className="sm:max-w-md border-border bg-card">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <Bot className="w-5 h-5 text-primary" />
-                  Live Bots
+                  Deployed Strategies
                 </DialogTitle>
               </DialogHeader>
               <div className="mt-2">
-                {liveBotsLoading ? (
+                {deployedStrategiesLoading ? (
                   <p className="text-sm text-muted-foreground">Loading…</p>
                 ) : liveDeployments.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No active live deployments. Deploy from Strategy Studio.</p>
+                  <p className="text-sm text-muted-foreground">No deployed strategies yet. Deploy from Strategy Studio (backtest → Deploy → Live).</p>
                 ) : (
-                  <ul className="space-y-3">
-                    {liveDeployments.map((d) => (
-                      <li
-                        key={d.deployment_id}
-                        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 p-3 rounded-lg border border-border bg-muted/20"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-foreground truncate">{d.strategy_name || "Strategy"}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Live on: {d.target_accounts || "Personal Angel One"}
-                          </p>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          className="shrink-0 gap-1.5"
-                          disabled={stoppingId === d.deployment_id}
-                          onClick={() => handleStopDeployment(d.deployment_id)}
+                  <ul className="space-y-3 max-h-[60vh] overflow-y-auto">
+                    {liveDeployments.map((d) => {
+                      const executionStatus = d.order_placed
+                        ? "Executed"
+                        : d.status === "running"
+                          ? "Pending"
+                          : "Stopped";
+                      const capitalStr = d.capital != null && !Number.isNaN(d.capital)
+                        ? `₹${Number(d.capital).toLocaleString("en-IN")}`
+                        : null;
+                      return (
+                        <li
+                          key={d.deployment_id}
+                          className="flex flex-col gap-2 p-3 rounded-lg border border-border bg-muted/20"
                         >
-                          <Square className="w-3.5 h-3.5" />
-                          {stoppingId === d.deployment_id ? "Stopping…" : "Stop Process"}
-                        </Button>
-                      </li>
-                    ))}
+                          <div className="flex flex-row items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-foreground truncate">{d.strategy_name || "Strategy"}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                Accounts: {d.target_accounts || "Personal Angel One"}
+                              </p>
+                              <p className="text-[10px] text-muted-foreground/70 mt-1">
+                                {d.symbol && <span className="mr-2">Symbol: {d.symbol}</span>}
+                                {capitalStr && <span>Capital: {capitalStr}</span>}
+                              </p>
+                              <p className="text-[10px] mt-1">
+                                Quantity: {d.order_placed ? "Filled at market" : capitalStr ? `Buy: at market from capital (max shares = capital/price). Sell: full position.` : "At market"}
+                              </p>
+                            </div>
+                            <div className="flex flex-col items-end gap-1.5 shrink-0">
+                              <span className={`text-[10px] font-medium px-2 py-0.5 rounded ${
+                                executionStatus === "Executed"
+                                  ? "bg-profit/20 text-profit"
+                                  : executionStatus === "Pending"
+                                    ? "bg-amber-500/20 text-amber-600 dark:text-amber-400"
+                                    : "bg-muted text-muted-foreground"
+                              }`}>
+                                {executionStatus}
+                              </span>
+                              {d.status === "running" && (
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  className="gap-1.5"
+                                  disabled={stoppingId === d.deployment_id}
+                                  onClick={() => handleStopDeployment(d.deployment_id)}
+                                >
+                                  <Square className="w-3.5 h-3.5" />
+                                  {stoppingId === d.deployment_id ? "Stopping…" : "Stop"}
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
