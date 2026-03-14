@@ -8,7 +8,6 @@ import {
   PlugZap,
   Store,
   Users,
-  Rocket,
 } from "lucide-react";
 import { NavLink, Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -61,12 +60,6 @@ const navItems = [
     icon: Bookmark, 
     path: "/saved-strategies",
     description: "My library"
-  },
-  { 
-    title: "Deployed Strategies", 
-    icon: Rocket, 
-    path: "/deployed-strategies",
-    description: "Live deployments"
   },
   { 
     title: "Settings", 

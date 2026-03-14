@@ -1761,6 +1761,8 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
         "strategy_deployment_id": strategy_deployment_id,
         "user_id": req.user_id,
         "strategy_name": req.strategy_name[:256] if req.strategy_name else "Live strategy",
+        "symbol": (req.symbol or "").strip() or None,
+        "capital": float(req.capital) if req.capital is not None else None,
         "target_accounts": target_accounts,
         "status": "running",
     })
@@ -1794,16 +1796,25 @@ async def get_all_deployments(user_id: str = Query(..., min_length=1, max_length
     rows = _sb_get("live_deployments", {"user_id": f"eq.{user_id}"}, limit=100)
     if not rows:
         return []
-    return [
-        {
+    out = []
+    for r in rows:
+        cap = r.get("capital")
+        try:
+            capital_val = float(cap) if cap is not None and cap != "" else None
+        except (TypeError, ValueError):
+            capital_val = None
+        out.append({
             "deployment_id": r.get("deployment_id"),
             "strategy_name": r.get("strategy_name"),
+            "symbol": r.get("symbol"),
+            "capital": capital_val,
             "target_accounts": r.get("target_accounts"),
             "status": r.get("status") or "stopped",
+            "order_placed": bool(r.get("order_placed")),
+            "executed_at": r.get("executed_at"),
             "created_at": r.get("created_at"),
-        }
-        for r in rows
-    ]
+        })
+    return out
 
 
 class StopDeploymentRequest(BaseModel):
@@ -1960,6 +1971,8 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
                     )
                     _deployment_position_state[deployment_id] = True
                     logging.info("Engine deployment %s: BUY placed qty=%s; stopping deployment (one-shot).", deployment_id[:8], order_qty)
+                if _sb_ok():
+                    _sb_update("live_deployments", {"order_placed": True, "executed_at": datetime.utcnow().isoformat() + "Z"}, {"deployment_id": deployment_id})
                 break  # Stop after first order so engine does not fire again
             else:
                 clients = _sb_get(
@@ -1992,6 +2005,8 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
                     )
                     _deployment_position_state[deployment_id] = False
                     logging.info("Engine deployment %s: SELL placed qty=%s; stopping deployment (one-shot).", deployment_id[:8], order_qty)
+                if _sb_ok():
+                    _sb_update("live_deployments", {"order_placed": True, "executed_at": datetime.utcnow().isoformat() + "Z"}, {"deployment_id": deployment_id})
                 break  # Stop after first order so engine does not fire again
     except asyncio.CancelledError:
         pass
