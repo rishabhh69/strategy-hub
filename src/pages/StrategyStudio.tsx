@@ -26,6 +26,7 @@ import {
   DEFAULT_INSTRUMENT,
   getInstrumentByValueOrDefault,
   SYMBOL_GROUPS,
+  ALL_INSTRUMENTS,
   type Instrument,
 } from "@/lib/symbolMap";
 import { SelectGroup, SelectLabel } from "@/components/ui/select";
@@ -705,9 +706,17 @@ Examples:
           onOpenChange={setDeploymentOpen}
           onConfirmPaper={handleDeployToLiveTerminal}
           hasActiveBroker={activeBrokers.length > 0 || hasActiveClients}
+          hasActiveClients={hasActiveClients}
           brokers={activeBrokers}
           liveDeploying={liveDeploying}
-          onConfirmLive={async ({ brokerId, capital: capitalNum }) => {
+          deploySymbol={{
+            value: selectedInstrument.value,
+            label: selectedInstrument.label,
+            angelSymbol: selectedInstrument.angelSymbol,
+            token: selectedInstrument.token,
+          }}
+          deploySymbolOptions={SYMBOL_GROUPS}
+          onConfirmLive={async ({ brokerId, capital: capitalNum, symbol: deploySymbolValue, angel_symbol: deployAngelSymbol, token: deployToken }) => {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user?.id) {
               toast.error("You must be signed in to deploy a live strategy.");
@@ -721,6 +730,8 @@ Examples:
               toast.error("Run a backtest first so the strategy can be evaluated live.");
               return;
             }
+            const symbol = deploySymbolValue ?? selectedInstrument.value;
+            const inst = ALL_INSTRUMENTS.find((i) => i.value === symbol) ?? selectedInstrument;
             setLiveDeploying(true);
             try {
               const res = await fetch(`${API_BASE}/api/strategy/deploy`, {
@@ -730,11 +741,11 @@ Examples:
                   user_id: user.id,
                   broker_name: "angelone",
                   strategy_name: strategyInput.trim().slice(0, 200) || "Backtest strategy",
-                  symbol: selectedInstrument.value,
+                  symbol,
                   strategy_logic: backtestResult.generated_code.trim(),
                   capital: capitalNum,
-                  angel_symbol: selectedInstrument.angelSymbol,
-                  token: selectedInstrument.token,
+                  angel_symbol: deployAngelSymbol ?? inst.angelSymbol,
+                  token: deployToken ?? inst.token,
                 }),
               });
               const data = await res.json().catch(() => ({}));
@@ -743,7 +754,7 @@ Examples:
                 toast.error(msg);
                 return;
               }
-              toast.success("Strategy is live. Orders will be placed only when your strategy conditions are met.");
+              toast.success("Strategy is live. We monitor the market with your strategy and will place one order when conditions are met, then stop.");
               setDeploymentOpen(false);
             } catch (err) {
               console.error(err);

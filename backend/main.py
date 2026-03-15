@@ -1844,6 +1844,8 @@ async def stop_deployment(req: StopDeploymentRequest):
 async def _run_single_deployment_loop(deployment_id: str) -> None:
     """
     Per-deployment async loop: run strategy every ~2 min with position state guardrail.
+    When conditions are met, execute trades on all brokers (single account or all client accounts)
+    once, with the deployment's chosen stock and quantity (capital/price), then stop the strategy.
     BUY only when state['in_position'] is False; SELL only when True. Prevents continuous buys.
     """
     from routes.broker import get_angel_positions, place_order_impl, place_bulk_order_impl
@@ -1855,6 +1857,8 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
                 if not live_rows or (live_rows[0].get("status") or "").strip().lower() != "running":
                     break
                 live = live_rows[0]
+                if live.get("order_placed"):
+                    break  # Already executed once; do not place again
                 strat_id = live.get("strategy_deployment_id")
                 if not strat_id:
                     break

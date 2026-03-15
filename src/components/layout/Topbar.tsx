@@ -377,7 +377,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                   Deployed Strategies
                 </DialogTitle>
                 <p className="text-xs text-muted-foreground font-normal mt-1">
-                  View and stop strategies on your broker. After a trade is executed on the broker, the strategy stops automatically.
+                  View all deployed strategies: see how many accounts each is on, capital, and stop the bot whenever you want. After a trade is executed, the strategy stops automatically.
                 </p>
               </DialogHeader>
               <div className="mt-2">
@@ -402,6 +402,12 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                         : capitalStr
                           ? "Buy: at market (qty from capital/price). Sell: full position."
                           : "At market";
+                      const targetAccounts = d.target_accounts || "Personal Angel One";
+                      const accountCountMatch = targetAccounts.match(/^(\d+)\s+Client/);
+                      const accountCount = accountCountMatch ? parseInt(accountCountMatch[1], 10) : 1;
+                      const accountsLine = accountCount > 1
+                        ? `Deployed on ${accountCount} accounts (Client Accounts)`
+                        : `Deployed on 1 account (Personal Angel One)`;
                       return (
                         <li
                           key={d.deployment_id}
@@ -411,13 +417,15 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                             <div className="min-w-0 flex-1">
                               <p className="text-sm font-medium text-foreground truncate">{d.strategy_name || "Strategy"}</p>
                               <p className="text-xs text-muted-foreground mt-0.5">
-                                Operating on accounts: {d.target_accounts || "Personal Angel One"}
+                                {accountsLine}
                               </p>
-                              <p className="text-[10px] text-muted-foreground/70 mt-1">
+                              <p className="text-xs font-medium text-foreground mt-1">
+                                Capital: {capitalStr ?? "—"}
+                              </p>
+                              <p className="text-[10px] text-muted-foreground/70 mt-0.5">
                                 {d.symbol && <span className="mr-2">Symbol: {d.symbol}</span>}
-                                {capitalStr && <span>Capital: {capitalStr}</span>}
                               </p>
-                              <p className="text-[10px] mt-1">
+                              <p className="text-[10px] mt-0.5">
                                 Quantity: {quantityText}
                               </p>
                               <p className="text-[10px] text-muted-foreground/70 mt-0.5">
@@ -441,9 +449,10 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                                   className="gap-1.5"
                                   disabled={stoppingId === d.deployment_id}
                                   onClick={() => handleStopDeployment(d.deployment_id)}
+                                  title="Stop this strategy"
                                 >
                                   <Square className="w-3.5 h-3.5" />
-                                  {stoppingId === d.deployment_id ? "Stopping…" : "Stop"}
+                                  {stoppingId === d.deployment_id ? "Stopping…" : "Stop bot"}
                                 </Button>
                               )}
                             </div>
