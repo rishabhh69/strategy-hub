@@ -707,7 +707,6 @@ Examples:
           onConfirmPaper={handleDeployToLiveTerminal}
           hasActiveBroker={activeBrokers.length > 0 || hasActiveClients}
           hasActiveClients={hasActiveClients}
-          brokers={activeBrokers}
           liveDeploying={liveDeploying}
           deploySymbol={{
             value: selectedInstrument.value,
@@ -716,14 +715,7 @@ Examples:
             token: selectedInstrument.token,
           }}
           deploySymbolOptions={SYMBOL_GROUPS}
-          onConfirmLive={async ({
-            brokerId,
-            capital: capitalNum,
-            symbol: deploySymbolValue,
-            angel_symbol: deployAngelSymbol,
-            token: deployToken,
-            targetAccounts,
-          }) => {
+          onConfirmLive={async ({ capital: capitalNum, symbol: deploySymbolValue, angel_symbol: deployAngelSymbol, token: deployToken, targetAccounts }) => {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user?.id) {
               toast.error("You must be signed in to deploy a live strategy.");

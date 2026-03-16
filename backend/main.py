@@ -1936,14 +1936,29 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
             token_val = dep.get("token") or ""
             order_qty = max(1, int(capital / price)) if want_buy else abs(open_qty)
 
+            # Decide execution scope from live_deployments.target_accounts (frontend payload).
+            target_scope = "auto"
+            try:
+                raw_ta = live.get("target_accounts")
+                if isinstance(raw_ta, str):
+                    ta_val = json.loads(raw_ta)
+                else:
+                    ta_val = raw_ta
+                if isinstance(ta_val, dict):
+                    target_scope = str(ta_val.get("type") or "auto")
+            except Exception:
+                target_scope = "auto"
+
             if want_buy:
-                clients = _sb_get(
-                    "client_accounts",
-                    filters={"ria_user_id": f"eq.{user_id}", "status": "eq.Active"},
-                    select="id",
-                    limit=1,
-                )
-                if clients and angel_sym and token_val:
+                clients = []
+                if target_scope in ("auto", "all_active_clients", "single_client"):
+                    clients = _sb_get(
+                        "client_accounts",
+                        filters={"ria_user_id": f"eq.{user_id}", "status": "eq.Active"},
+                        select="id",
+                        limit=1,
+                    )
+                if clients and angel_sym and token_val and target_scope != "personal":
                     try:
                         await place_bulk_order_impl(
                             ria_user_id=user_id,
@@ -1968,7 +1983,27 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
                     _deployment_position_state[deployment_id] = True
                     logging.info("Engine deployment %s: BUY placed qty=%s; stopping deployment (one-shot).", deployment_id[:8], order_qty)
                 if _sb_ok():
-                    _sb_update("live_deployments", {"order_placed": True, "executed_at": datetime.utcnow().isoformat() + "Z", "status": "stopped"}, {"deployment_id": deployment_id})
+                    # Mark deployment stopped and create bell notification for this execution.
+                    _sb_update(
+                        "live_deployments",
+                        {
+                            "order_placed": True,
+                            "executed_at": datetime.utcnow().isoformat() + "Z",
+                            "status": "stopped",
+                        },
+                        {"deployment_id": deployment_id},
+                    )
+                    try:
+                        notif_payload = {
+                            "user_id": user_id,
+                            "title": f"Live trade executed ({symbol})",
+                            "body": f"Strategy '{dep.get('strategy_name') or 'Live strategy'}' executed a {txn_type} order.",
+                            "is_read": False,
+                            "created_at": datetime.utcnow().isoformat() + "Z",
+                        }
+                        _sb_insert_try("notifications", notif_payload)
+                    except Exception:
+                        pass
                 break  # Stop after first order so strategy auto-stops
             else:
                 clients = _sb_get(
@@ -2002,7 +2037,27 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
                     _deployment_position_state[deployment_id] = False
                     logging.info("Engine deployment %s: SELL placed qty=%s; stopping deployment (one-shot).", deployment_id[:8], order_qty)
                 if _sb_ok():
-                    _sb_update("live_deployments", {"order_placed": True, "executed_at": datetime.utcnow().isoformat() + "Z", "status": "stopped"}, {"deployment_id": deployment_id})
+                    # Mark deployment stopped and create bell notification for this execution.
+                    _sb_update(
+                        "live_deployments",
+                        {
+                            "order_placed": True,
+                            "executed_at": datetime.utcnow().isoformat() + "Z",
+                            "status": "stopped",
+                        },
+                        {"deployment_id": deployment_id},
+                    )
+                    try:
+                        notif_payload = {
+                            "user_id": user_id,
+                            "title": f"Live trade executed ({symbol})",
+                            "body": f"Strategy '{dep.get('strategy_name') or 'Live strategy'}' executed a {txn_type} order.",
+                            "is_read": False,
+                            "created_at": datetime.utcnow().isoformat() + "Z",
+                        }
+                        _sb_insert_try("notifications", notif_payload)
+                    except Exception:
+                        pass
                 break  # Stop after first order so strategy auto-stops
     except asyncio.CancelledError:
         pass

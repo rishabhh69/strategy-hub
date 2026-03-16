@@ -17,11 +17,6 @@ import { supabase } from "@/integrations/supabase/client";
 
 type Mode = "paper" | "live";
 
-interface BrokerOption {
-  id: string;
-  label: string;
-}
-
 /** Option for "Stock for deployment" in live mode. */
 export interface DeploySymbolOption {
   value: string;
@@ -35,7 +30,6 @@ interface DeploymentModalProps {
   onOpenChange: (open: boolean) => void;
   onConfirmPaper: () => void;
   onConfirmLive?: (opts: {
-    brokerId: string;
     capital: number;
     symbol?: string;
     angel_symbol?: string;
@@ -44,7 +38,6 @@ interface DeploymentModalProps {
   }) => void | Promise<void>;
   hasActiveBroker: boolean;
   hasActiveClients?: boolean;
-  brokers: BrokerOption[];
   liveDeploying?: boolean;
   /** Current symbol (e.g. from backtest). Used as default for live deploy. */
   deploySymbol?: DeploySymbolOption | null;
@@ -77,7 +70,6 @@ export function DeploymentModal({
 }: DeploymentModalProps) {
   const navigate = useNavigate();
   const [mode, setMode] = useState<Mode>("paper");
-  const [selectedBrokerId, setSelectedBrokerId] = useState<string>("");
   const [capital, setCapital] = useState<string>("");
   const flatSymbols = deploySymbolOptions ? flattenSymbolOptions(deploySymbolOptions) : [];
   const [deploySymbolValue, setDeploySymbolValue] = useState<string>(deploySymbol?.value ?? flatSymbols[0]?.value ?? "");
@@ -154,9 +146,8 @@ export function DeploymentModal({
     if (!hasActiveBroker) {
       return;
     }
-    const brokerId = selectedBrokerId || (brokers[0]?.id ?? "");
     const capitalNum = Number(capital || 0);
-    if (!brokerId || !onConfirmLive) return;
+    if (!onConfirmLive) return;
     let targetAccounts: unknown = { type: "personal" };
     if (hasActiveClients && clientOptions.length > 0) {
       if (targetAccountsSelection === "all_active_clients") {
@@ -179,7 +170,6 @@ export function DeploymentModal({
     try {
       await Promise.resolve(
         onConfirmLive({
-          brokerId,
           capital: Number.isNaN(capitalNum) ? 0 : capitalNum,
           symbol: selectedDeploySymbol?.value,
           angel_symbol: selectedDeploySymbol?.angelSymbol,
@@ -310,24 +300,6 @@ export function DeploymentModal({
                       </Select>
                     </div>
                   )}
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">Broker Account</label>
-                    <Select
-                      value={selectedBrokerId || brokers[0]?.id}
-                      onValueChange={(v) => setSelectedBrokerId(v)}
-                    >
-                      <SelectTrigger className="h-9 bg-card border-border text-xs">
-                        <SelectValue placeholder="Select broker account" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {brokers.map((b) => (
-                          <SelectItem key={b.id} value={b.id} className="text-xs">
-                            {b.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
                   <div className="space-y-1">
                     <label className="text-xs text-muted-foreground">Target Accounts</label>
                     <Select
