@@ -1700,6 +1700,7 @@ class DeployStrategyRequest(BaseModel):
     capital: float = Field(..., ge=0)
     angel_symbol: Optional[str] = Field(default=None, max_length=64)
     token: Optional[str] = Field(default=None, max_length=32)
+    target_accounts: Optional[Any] = Field(default=None)
 
 
 @app.post("/api/strategy/deploy")
@@ -1750,18 +1751,21 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
     if not strategy_deployment_id:
         return {"ok": True, "id": None, "status": "Live", "message": "Strategy is live."}
 
-    # Target accounts label for UI
-    clients = _sb_get(
-        "client_accounts",
-        filters={"ria_user_id": f"eq.{req.user_id}", "status": "eq.Active"},
-        select="id",
-        limit=500,
-    )
-    client_count = len(clients) if clients else 0
-    target_accounts_label = f"{client_count} Client Accounts" if client_count > 0 else "Personal Angel One"
-    raw_target_accounts = target_accounts_label
+    # Target accounts payload (used by engine / UI). Prefer explicit payload from frontend, fall back to label.
+    if req.target_accounts is not None:
+        raw_target_accounts = req.target_accounts
+    else:
+        clients = _sb_get(
+            "client_accounts",
+            filters={"ria_user_id": f"eq.{req.user_id}", "status": "eq.Active"},
+            select="id",
+            limit=500,
+        )
+        client_count = len(clients) if clients else 0
+        target_accounts_label = f"{client_count} Client Accounts" if client_count > 0 else "Personal Angel One"
+        raw_target_accounts = target_accounts_label
     try:
-        target_accounts_value = raw_target_accounts if isinstance(raw_target_accounts, str) else json.dumps(raw_target_accounts)
+        target_accounts_value = json.dumps(raw_target_accounts)
     except TypeError:
         target_accounts_value = str(raw_target_accounts)
 
@@ -1772,8 +1776,6 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
             "strategy_deployment_id": strategy_deployment_id,
             "user_id": req.user_id,
             "strategy_name": req.strategy_name[:256] if req.strategy_name else "Live strategy",
-            "symbol": (req.symbol or "").strip() or None,
-            "capital": float(req.capital) if req.capital is not None else None,
             "target_accounts": target_accounts_value,
             "status": "running",
         })

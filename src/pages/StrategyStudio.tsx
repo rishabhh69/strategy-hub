@@ -716,7 +716,14 @@ Examples:
             token: selectedInstrument.token,
           }}
           deploySymbolOptions={SYMBOL_GROUPS}
-          onConfirmLive={async ({ brokerId, capital: capitalNum, symbol: deploySymbolValue, angel_symbol: deployAngelSymbol, token: deployToken }) => {
+          onConfirmLive={async ({
+            brokerId,
+            capital: capitalNum,
+            symbol: deploySymbolValue,
+            angel_symbol: deployAngelSymbol,
+            token: deployToken,
+            targetAccounts,
+          }) => {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user?.id) {
               toast.error("You must be signed in to deploy a live strategy.");
@@ -746,6 +753,7 @@ Examples:
                   capital: capitalNum,
                   angel_symbol: deployAngelSymbol ?? inst.angelSymbol,
                   token: deployToken ?? inst.token,
+                  target_accounts: targetAccounts ?? null,
                 }),
               });
               const data = await res.json().catch(() => ({}));

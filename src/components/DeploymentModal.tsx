@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { supabase } from "@/integrations/supabase/client";
 
 type Mode = "paper" | "live";
 
@@ -39,6 +40,7 @@ interface DeploymentModalProps {
     symbol?: string;
     angel_symbol?: string;
     token?: string;
+    targetAccounts?: unknown;
   }) => void | Promise<void>;
   hasActiveBroker: boolean;
   hasActiveClients?: boolean;
@@ -79,10 +81,66 @@ export function DeploymentModal({
   const [capital, setCapital] = useState<string>("");
   const flatSymbols = deploySymbolOptions ? flattenSymbolOptions(deploySymbolOptions) : [];
   const [deploySymbolValue, setDeploySymbolValue] = useState<string>(deploySymbol?.value ?? flatSymbols[0]?.value ?? "");
+  const [targetAccountsSelection, setTargetAccountsSelection] = useState<string>("personal");
+  const [clientOptions, setClientOptions] = useState<{ id: string; client_name: string; status?: string | null }[]>([]);
+  const [loadingClients, setLoadingClients] = useState(false);
 
   useEffect(() => {
     if (open && deploySymbol?.value) setDeploySymbolValue(deploySymbol.value);
   }, [open, deploySymbol?.value]);
+
+  useEffect(() => {
+    if (!open || !hasActiveBroker) return;
+    let isCancelled = false;
+    const fetchClients = async () => {
+      setLoadingClients(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user?.id) {
+          if (!isCancelled) {
+            setClientOptions([]);
+          }
+          return;
+        }
+        const { data, error } = await supabase
+          .from("client_accounts")
+          .select("id, client_name, status, created_at")
+          .eq("ria_user_id", user.id)
+          .order("created_at", { ascending: false });
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error("Failed to load client_accounts for deployment modal:", error);
+          if (!isCancelled) {
+            setClientOptions([]);
+          }
+          return;
+        }
+        const rows = Array.isArray(data) ? data : [];
+        const active = rows.filter((r) => (r.status ?? "Active") === "Active");
+        if (!isCancelled) {
+          setClientOptions(active);
+          // If RIA has active clients, default to all_active_clients; else personal.
+          setTargetAccountsSelection(active.length > 0 ? "all_active_clients" : "personal");
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("Error while fetching client_accounts for deployment modal:", e);
+        if (!isCancelled) {
+          setClientOptions([]);
+        }
+      } finally {
+        if (!isCancelled) {
+          setLoadingClients(false);
+        }
+      }
+    };
+    fetchClients();
+    return () => {
+      isCancelled = true;
+    };
+  }, [open, hasActiveBroker]);
 
   const selectedDeploySymbol =
     flatSymbols.find((s) => s.value === deploySymbolValue) ?? deploySymbol ?? flatSymbols[0];
@@ -99,6 +157,25 @@ export function DeploymentModal({
     const brokerId = selectedBrokerId || (brokers[0]?.id ?? "");
     const capitalNum = Number(capital || 0);
     if (!brokerId || !onConfirmLive) return;
+    let targetAccounts: unknown = { type: "personal" };
+    if (hasActiveClients && clientOptions.length > 0) {
+      if (targetAccountsSelection === "all_active_clients") {
+        targetAccounts = { type: "all_active_clients" };
+      } else if (targetAccountsSelection === "personal") {
+        targetAccounts = { type: "personal" };
+      } else {
+        const client = clientOptions.find((c) => c.id === targetAccountsSelection);
+        if (client) {
+          targetAccounts = {
+            type: "single_client",
+            client_id: client.id,
+            client_name: client.client_name,
+          };
+        } else {
+          targetAccounts = { type: "personal" };
+        }
+      }
+    }
     try {
       await Promise.resolve(
         onConfirmLive({
@@ -107,6 +184,7 @@ export function DeploymentModal({
           symbol: selectedDeploySymbol?.value,
           angel_symbol: selectedDeploySymbol?.angelSymbol,
           token: selectedDeploySymbol?.token,
+          targetAccounts,
         })
       );
       onOpenChange(false);
@@ -249,9 +327,35 @@ export function DeploymentModal({
                         ))}
                       </SelectContent>
                     </Select>
-                    <p className="text-xs text-muted-foreground/80">
-                      Target: {hasActiveClients ? "All Active Client Accounts" : "Your broker (Angel One)"}
-                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Target Accounts</label>
+                    <Select
+                      value={targetAccountsSelection}
+                      onValueChange={(v) => setTargetAccountsSelection(v)}
+                    >
+                      <SelectTrigger className="h-9 bg-card border-border text-xs">
+                        <SelectValue placeholder="Select target accounts" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all_active_clients" className="text-xs">
+                          Target: All Active Client Accounts
+                        </SelectItem>
+                        <SelectItem value="personal" className="text-xs">
+                          Target: Personal Broker Account
+                        </SelectItem>
+                        {clientOptions.map((client) => (
+                          <SelectItem key={client.id} value={client.id} className="text-xs">
+                            {`Client: ${client.client_name}`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {loadingClients && (
+                      <p className="text-[10px] text-muted-foreground/80">
+                        Loading client accounts…
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs text-muted-foreground">
