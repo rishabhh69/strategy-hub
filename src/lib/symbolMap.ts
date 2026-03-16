@@ -22,17 +22,19 @@ const INDICES: Instrument[] = [
 ];
 
 const STOCKS: Instrument[] = [
-  { value: "RELIANCE",    label: "Reliance Industries", tvSymbol: "NSE:RELIANCE",   angelSymbol: "RELIANCE-EQ",   token: "2881",  category: "STOCKS" },
-  { value: "TCS",         label: "TCS",                 tvSymbol: "NSE:TCS",        angelSymbol: "TCS-EQ",        token: "11536", category: "STOCKS" },
-  { value: "HDFCBANK",    label: "HDFC Bank",          tvSymbol: "NSE:HDFCBANK",   angelSymbol: "HDFCBANK-EQ",   token: "1330",  category: "STOCKS" },
-  { value: "INFY",        label: "Infosys",            tvSymbol: "NSE:INFY",      angelSymbol: "INFY-EQ",       token: "1594",  category: "STOCKS" },
-  { value: "ICICIBANK",   label: "ICICI Bank",         tvSymbol: "NSE:ICICIBANK", angelSymbol: "ICICIBANK-EQ",  token: "1333",  category: "STOCKS" },
-  { value: "SBIN",        label: "State Bank of India", tvSymbol: "NSE:SBIN",     angelSymbol: "SBIN-EQ",       token: "3045",  category: "STOCKS" },
-  { value: "BHARTIARTL",  label: "Bharti Airtel",      tvSymbol: "NSE:BHARTIARTL", angelSymbol: "BHARTIARTL-EQ", token: "10604", category: "STOCKS" },
-  { value: "TATAMOTORS",  label: "Tata Motors",        tvSymbol: "NSE:TATAMOTORS", angelSymbol: "TATAMOTORS-EQ",  token: "3456",  category: "STOCKS" },
-  { value: "BAJFINANCE",  label: "Bajaj Finance",      tvSymbol: "NSE:BAJFINANCE", angelSymbol: "BAJFINANCE-EQ",  token: "317",   category: "STOCKS" },
-  { value: "WIPRO",       label: "Wipro",              tvSymbol: "NSE:WIPRO",      angelSymbol: "WIPRO-EQ",       token: "6951",  category: "STOCKS" },
-  { value: "MARUTI",      label: "Maruti Suzuki",      tvSymbol: "NSE:MARUTI",     angelSymbol: "MARUTI-EQ",      token: "10999", category: "STOCKS" },
+  { value: "RELIANCE",    label: "Reliance Industries", tvSymbol: "NSE:RELIANCE",      angelSymbol: "RELIANCE-EQ",      token: "2881",   category: "STOCKS" },
+  { value: "TCS",         label: "TCS",                 tvSymbol: "NSE:TCS",           angelSymbol: "TCS-EQ",           token: "11536",  category: "STOCKS" },
+  { value: "HDFCBANK",    label: "HDFC Bank",          tvSymbol: "NSE:HDFCBANK",      angelSymbol: "HDFCBANK-EQ",      token: "1330",   category: "STOCKS" },
+  { value: "INFY",        label: "Infosys",            tvSymbol: "NSE:INFY",          angelSymbol: "INFY-EQ",          token: "1594",   category: "STOCKS" },
+  { value: "ICICIBANK",   label: "ICICI Bank",         tvSymbol: "NSE:ICICIBANK",     angelSymbol: "ICICIBANK-EQ",     token: "1333",   category: "STOCKS" },
+  { value: "SBIN",        label: "State Bank of India", tvSymbol: "NSE:SBIN",        angelSymbol: "SBIN-EQ",          token: "3045",   category: "STOCKS" },
+  { value: "BHARTIARTL",  label: "Bharti Airtel",      tvSymbol: "NSE:BHARTIARTL",    angelSymbol: "BHARTIARTL-EQ",    token: "10604",  category: "STOCKS" },
+  { value: "TATAMOTORS",  label: "Tata Motors",        tvSymbol: "NSE:TATAMOTORS",    angelSymbol: "TATAMOTORS-EQ",    token: "3456",   category: "STOCKS" },
+  { value: "BAJFINANCE",  label: "Bajaj Finance",      tvSymbol: "NSE:BAJFINANCE",    angelSymbol: "BAJFINANCE-EQ",    token: "317",    category: "STOCKS" },
+  { value: "WIPRO",       label: "Wipro",              tvSymbol: "NSE:WIPRO",         angelSymbol: "WIPRO-EQ",         token: "6951",   category: "STOCKS" },
+  { value: "MARUTI",      label: "Maruti Suzuki",      tvSymbol: "NSE:MARUTI",        angelSymbol: "MARUTI-EQ",        token: "10999",  category: "STOCKS" },
+  // IDEA / Vodafone Idea
+  { value: "IDEA",        label: "Vodafone Idea",      tvSymbol: "NSE:IDEA",          angelSymbol: "IDEA-EQ",          token: "",       category: "STOCKS" },
 ];
 
 const ETFS: Instrument[] = [
