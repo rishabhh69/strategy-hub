@@ -1726,30 +1726,8 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
             400,
             "Strategy logic must define a callable 'strategy(df)' function (e.g. from backtest). Run a backtest first and deploy from Strategy Studio.",
         )
-    deployment_uuid = str(uuid.uuid4())
-    payload = {
-        "id": deployment_uuid,
-        "user_id": req.user_id,
-        "broker_name": req.broker_name,
-        "strategy_id": req.strategy_id,
-        "strategy_name": req.strategy_name,
-        "symbol": req.symbol,
-        "strategy_logic": logic,
-        "capital": float(req.capital),
-        "status": "Live",
-    }
-    if req.angel_symbol is not None:
-        payload["angel_symbol"] = req.angel_symbol
-    if req.token is not None:
-        payload["token"] = req.token
-    try:
-        row = _sb_insert_raise("strategy_deployments", payload)
-    except Exception as e:
-        print(f"CRITICAL DB ERROR: {str(e)}")
-        raise HTTPException(500, f"Failed to save deployment to Supabase: {e}")
-    strategy_deployment_id = row.get("id") or deployment_uuid
-    if not strategy_deployment_id:
-        return {"ok": True, "id": None, "status": "Live", "message": "Strategy is live."}
+    # Use explicit UUIDs for both strategy_deployment_id and deployment_id to satisfy live_deployments schema.
+    strategy_deployment_id = str(uuid.uuid4())
 
     # Target accounts payload (used by engine / UI). Prefer explicit payload from frontend, fall back to label.
     if req.target_accounts is not None:
