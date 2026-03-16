@@ -1749,14 +1749,20 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
 
     deployment_id = str(uuid.uuid4())
     try:
-        live_row = _sb_insert_raise("live_deployments", {
-            "deployment_id": deployment_id,
-            "strategy_deployment_id": strategy_deployment_id,
-            "user_id": req.user_id,
-            "strategy_name": req.strategy_name[:256] if req.strategy_name else "Live strategy",
-            "target_accounts": target_accounts_value,
-            "status": "running",
-        })
+        live_row = _sb_insert_raise(
+            "live_deployments",
+            {
+                "deployment_id": deployment_id,
+                "strategy_deployment_id": strategy_deployment_id,
+                "user_id": req.user_id,
+                "strategy_name": req.strategy_name[:256] if req.strategy_name else "Live strategy",
+                # Persist symbol and capital so Deployed Strategies modal can render correctly.
+                "symbol": (req.symbol or "").strip(),
+                "capital": float(req.capital),
+                "target_accounts": target_accounts_value,
+                "status": "running",
+            },
+        )
     except Exception as e:
         print(f"CRITICAL DB ERROR: {str(e)}")
         raise HTTPException(500, f"Failed to create live deployment: {e}")
@@ -2064,8 +2070,6 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
     finally:
         active_live_deployments.pop(deployment_id, None)
         _deployment_position_state.pop(deployment_id, None)
-        if _sb_ok():
-            _sb_update("live_deployments", {"status": "stopped"}, {"deployment_id": deployment_id})
         logging.info("Engine deployment %s stopped", deployment_id[:8])
 
 

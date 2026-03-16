@@ -402,12 +402,38 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                         : capitalStr
                           ? "Buy: at market (qty from capital/price). Sell: full position."
                           : "At market";
-                      const targetAccounts = d.target_accounts || "Personal Angel One";
-                      const accountCountMatch = targetAccounts.match(/^(\d+)\s+Client/);
-                      const accountCount = accountCountMatch ? parseInt(accountCountMatch[1], 10) : 1;
-                      const accountsLine = accountCount > 1
-                        ? `Deployed on ${accountCount} accounts (Client Accounts)`
-                        : `Deployed on 1 account (Personal Angel One)`;
+                      // Target accounts: handle legacy string labels and new JSON-encoded metadata
+                      let accountsLine = "Deployed on 1 account (Personal Angel One)";
+                      const rawTarget = d.target_accounts;
+                      if (rawTarget) {
+                        let parsed: unknown = rawTarget;
+                        if (typeof rawTarget === "string") {
+                          try {
+                            parsed = JSON.parse(rawTarget);
+                          } catch {
+                            parsed = rawTarget;
+                          }
+                        }
+                        if (typeof parsed === "string") {
+                          const s = parsed as string;
+                          const accountCountMatch = s.match(/^(\d+)\s+Client/);
+                          const accountCount = accountCountMatch ? parseInt(accountCountMatch[1], 10) : 1;
+                          accountsLine =
+                            accountCount > 1
+                              ? `Deployed on ${accountCount} accounts (Client Accounts)`
+                              : `Deployed on 1 account (Personal Angel One)`;
+                        } else if (parsed && typeof parsed === "object") {
+                          const ta = parsed as { type?: string; client_name?: string };
+                          const t = (ta.type || "").toLowerCase();
+                          if (t === "all_clients" || t === "all_active_clients") {
+                            accountsLine = "Deployed on All Active Client Accounts";
+                          } else if (t === "personal" || !t) {
+                            accountsLine = "Deployed on 1 account (Personal Angel One)";
+                          } else if (t === "single_client" && ta.client_name) {
+                            accountsLine = `Deployed on Client: ${ta.client_name}`;
+                          }
+                        }
+                      }
                       return (
                         <li
                           key={d.deployment_id}
