@@ -1780,21 +1780,19 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
         target_accounts_value = str(raw_target_accounts)
 
     deployment_id = str(uuid.uuid4())
+    # Construct a sanitized payload for live_deployments insert to avoid schema mismatch.
+    safe_insert_payload: Dict[str, Any] = {
+        "deployment_id": deployment_id,
+        "strategy_deployment_id": strategy_deployment_id,
+        "user_id": req.user_id,
+        "strategy_name": req.strategy_name[:256] if req.strategy_name else "Live strategy",
+        "target_accounts": target_accounts_value,
+        "status": "running",
+        "capital": float(req.capital) if req.capital is not None else 0.0,
+    }
+    print("=== SANITIZED PAYLOAD ===", safe_insert_payload)
     try:
-        live_row = _sb_insert_raise(
-            "live_deployments",
-            {
-                "deployment_id": deployment_id,
-                "strategy_deployment_id": strategy_deployment_id,
-                "user_id": req.user_id,
-                "strategy_name": req.strategy_name[:256] if req.strategy_name else "Live strategy",
-                # Persist symbol and capital so Deployed Strategies modal can render correctly.
-                "symbol": (req.symbol or "").strip(),
-                "capital": float(req.capital),
-                "target_accounts": target_accounts_value,
-                "status": "running",
-            },
-        )
+        live_row = _sb_insert_raise("live_deployments", safe_insert_payload)
     except Exception as e:
         print(f"CRITICAL DB ERROR: {str(e)}")
         raise HTTPException(500, f"Failed to create live deployment: {e}")
