@@ -1205,6 +1205,38 @@ _BOT_META:     Dict[str, Dict]         = {}   # bot_id → {user_id, symbol, qty
 _deployment_position_state: Dict[str, bool] = {}   # deployment_id -> in_position (True = have open long)
 active_live_deployments: Dict[str, asyncio.Task] = {}   # deployment_id -> asyncio.Task (for cancel)
 
+
+async def send_in_app_notification(user_id: str, title: str, message: str, type: str) -> None:
+    """
+    Insert an in-app notification row into Supabase 'notifications' table.
+
+    Expected Supabase schema (run in SQL editor if table is missing):
+
+        create table if not exists public.notifications (
+          id uuid primary key default gen_random_uuid(),
+          user_id text not null,
+          title text not null,
+          message text not null,
+          type text not null default 'info',
+          read_status boolean not null default false,
+          created_at timestamptz not null default now()
+        );
+    """
+    if not _sb_ok():
+        return
+    payload: Dict[str, Any] = {
+        "user_id": user_id,
+        "title": title,
+        "message": message,
+        "type": type,
+        "read_status": False,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+    }
+    try:
+        _sb_insert_try("notifications", payload)
+    except Exception as e:  # noqa: BLE001
+        logging.warning("send_in_app_notification failed for user_id=%s: %s", user_id, e)
+
 # ---------------------------------------------------------------------------
 # _SAFE_BUILTINS — OWASP A03 Injection: restricted builtins for exec() sandbox
 # Used by /backtest and bot_worker. Blocks open, import, eval, exec, globals, etc.
@@ -1842,11 +1874,11 @@ async def stop_deployment(req: StopDeploymentRequest):
 async def _run_single_deployment_loop(deployment_id: str) -> None:
     """
     Per-deployment async loop: run strategy every ~2 min with position state guardrail.
-    When conditions are met, execute trades on all brokers (single account or all client accounts)
-    once, with the deployment's chosen stock and quantity (capital/price), then stop the strategy.
+    State machine: awaiting_entry -> in_position -> completed.
     BUY only when state['in_position'] is False; SELL only when True. Prevents continuous buys.
     """
     from routes.broker import get_angel_positions, place_order_impl, place_bulk_order_impl
+    bot_state = "awaiting_entry"
     try:
         while True:
             await asyncio.sleep(120)
@@ -1856,7 +1888,7 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
                     break
                 live = live_rows[0]
                 if live.get("order_placed"):
-                    break  # Already executed once; do not place again
+                    break  # Already completed; do not continue monitoring
                 strat_id = live.get("strategy_deployment_id")
                 if not strat_id:
                     break
@@ -1955,7 +1987,8 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
             except Exception:
                 target_scope = "auto"
 
-            if want_buy:
+            # Phase 1: Entry (BUY) — only when awaiting_entry
+            if want_buy and bot_state == "awaiting_entry":
                 clients = []
                 if target_scope in ("auto", "all_active_clients", "single_client"):
                     clients = _sb_get(
@@ -1977,9 +2010,11 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
                             price=None,
                         )
                         _deployment_position_state[deployment_id] = True
-                        logging.info("Engine deployment %s: bulk BUY placed; stopping deployment (one-shot).", deployment_id[:8])
+                        bot_state = "in_position"
+                        logging.info("Engine deployment %s: bulk BUY placed; bot_state=in_position.", deployment_id[:8])
                     except Exception as bulk_err:  # noqa: BLE001
                         logging.warning("Engine bulk order failed %s: %s", deployment_id[:8], bulk_err)
+                        continue
                 else:
                     await asyncio.to_thread(
                         place_order_impl,
@@ -1987,84 +2022,71 @@ async def _run_single_deployment_loop(deployment_id: str) -> None:
                         angel_symbol=angel_sym or None, token=token_val or None,
                     )
                     _deployment_position_state[deployment_id] = True
-                    logging.info("Engine deployment %s: BUY placed qty=%s; stopping deployment (one-shot).", deployment_id[:8], order_qty)
-                if _sb_ok():
-                    # Mark deployment stopped and create bell notification for this execution.
-                    _sb_update(
-                        "live_deployments",
-                        {
-                            "order_placed": True,
-                            "executed_at": datetime.utcnow().isoformat() + "Z",
-                            "status": "stopped",
-                        },
-                        {"deployment_id": deployment_id},
-                    )
-                    try:
-                        notif_payload = {
-                            "user_id": user_id,
-                            "title": f"Live trade executed ({symbol})",
-                            "body": f"Strategy '{dep.get('strategy_name') or 'Live strategy'}' executed a {txn_type} order.",
-                            "is_read": False,
-                            "created_at": datetime.utcnow().isoformat() + "Z",
-                        }
-                        _sb_insert_try("notifications", notif_payload)
-                    except Exception:
-                        pass
-                break  # Stop after first order so strategy auto-stops
-            else:
-                clients = _sb_get(
-                    "client_accounts",
-                    filters={"ria_user_id": f"eq.{user_id}", "status": "eq.Active"},
-                    select="id",
-                    limit=1,
+                    bot_state = "in_position"
+                    logging.info("Engine deployment %s: BUY placed qty=%s; bot_state=in_position.", deployment_id[:8], order_qty)
+                await send_in_app_notification(
+                    user_id,
+                    "Trade Entered",
+                    f"Strategy '{dep.get('strategy_name') or 'Live strategy'}' entered BUY on {symbol} at market.",
+                    "success",
                 )
-                if clients and angel_sym and token_val:
-                    try:
-                        await place_bulk_order_impl(
-                            ria_user_id=user_id,
-                            tradingsymbol=angel_sym,
-                            symboltoken=token_val,
-                            transaction_type=txn_type,
-                            order_type="MARKET",
-                            reference_price=price,
-                            exchange="NSE",
-                            price=None,
-                        )
-                        _deployment_position_state[deployment_id] = False
-                        logging.info("Engine deployment %s: bulk SELL placed; stopping deployment (one-shot).", deployment_id[:8])
-                    except Exception as bulk_err:  # noqa: BLE001
-                        logging.warning("Engine bulk order failed %s: %s", deployment_id[:8], bulk_err)
-                else:
-                    await asyncio.to_thread(
-                        place_order_impl,
-                        user_id, broker_name, symbol, order_qty, txn_type, "MARKET",
-                        angel_symbol=angel_sym or None, token=token_val or None,
+                continue
+
+            # Phase 2: Exit (SELL) — only when in_position
+            if not want_sell or bot_state != "in_position":
+                continue
+
+            clients = _sb_get(
+                "client_accounts",
+                filters={"ria_user_id": f"eq.{user_id}", "status": "eq.Active"},
+                select="id",
+                limit=1,
+            )
+            if clients and angel_sym and token_val:
+                try:
+                    await place_bulk_order_impl(
+                        ria_user_id=user_id,
+                        tradingsymbol=angel_sym,
+                        symboltoken=token_val,
+                        transaction_type=txn_type,
+                        order_type="MARKET",
+                        reference_price=price,
+                        exchange="NSE",
+                        price=None,
                     )
                     _deployment_position_state[deployment_id] = False
-                    logging.info("Engine deployment %s: SELL placed qty=%s; stopping deployment (one-shot).", deployment_id[:8], order_qty)
-                if _sb_ok():
-                    # Mark deployment stopped and create bell notification for this execution.
-                    _sb_update(
-                        "live_deployments",
-                        {
-                            "order_placed": True,
-                            "executed_at": datetime.utcnow().isoformat() + "Z",
-                            "status": "stopped",
-                        },
-                        {"deployment_id": deployment_id},
-                    )
-                    try:
-                        notif_payload = {
-                            "user_id": user_id,
-                            "title": f"Live trade executed ({symbol})",
-                            "body": f"Strategy '{dep.get('strategy_name') or 'Live strategy'}' executed a {txn_type} order.",
-                            "is_read": False,
-                            "created_at": datetime.utcnow().isoformat() + "Z",
-                        }
-                        _sb_insert_try("notifications", notif_payload)
-                    except Exception:
-                        pass
-                break  # Stop after first order so strategy auto-stops
+                    bot_state = "completed"
+                    logging.info("Engine deployment %s: bulk SELL placed; bot_state=completed.", deployment_id[:8])
+                except Exception as bulk_err:  # noqa: BLE001
+                    logging.warning("Engine bulk order failed %s: %s", deployment_id[:8], bulk_err)
+                    continue
+            else:
+                await asyncio.to_thread(
+                    place_order_impl,
+                    user_id, broker_name, symbol, order_qty, txn_type, "MARKET",
+                    angel_symbol=angel_sym or None, token=token_val or None,
+                )
+                _deployment_position_state[deployment_id] = False
+                bot_state = "completed"
+                logging.info("Engine deployment %s: SELL placed qty=%s; bot_state=completed.", deployment_id[:8], order_qty)
+
+            if _sb_ok():
+                _sb_update(
+                    "live_deployments",
+                    {
+                        "order_placed": True,
+                        "executed_at": datetime.utcnow().isoformat() + "Z",
+                        "status": "completed",
+                    },
+                    {"deployment_id": deployment_id},
+                )
+            await send_in_app_notification(
+                user_id,
+                "Trade Closed",
+                f"Strategy '{dep.get('strategy_name') or 'Live strategy'}' exited position on {symbol} and stopped.",
+                "info",
+            )
+            break  # Kill background task after full entry/exit cycle
     except asyncio.CancelledError:
         pass
     finally:
@@ -3604,7 +3626,23 @@ async def get_notifications(user_id: str = Query(..., min_length=1, max_length=1
         order="created_at.desc",
         limit=20,
     )
-    return rows or []
+    if not rows:
+        return []
+    # Normalise shape for frontend: map DB columns to {id, title, message, is_read, created_at}.
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        is_read = r.get("is_read")
+        read_status = r.get("read_status")
+        out.append(
+            {
+                "id": str(r.get("id") or ""),
+                "title": r.get("title") or "",
+                "message": r.get("message") or r.get("body") or "",
+                "is_read": bool(read_status is True or is_read is True),
+                "created_at": r.get("created_at"),
+            }
+        )
+    return out
 
 
 @app.post("/api/notifications/mark-read")
@@ -3614,8 +3652,8 @@ async def mark_notifications_read(req: NotificationMarkRead):
         raise HTTPException(400, "user_id required")
     _sb_update(
         "notifications",
-        {"is_read": True},
-        {"user_id": req.user_id, "is_read": "false"},
+        {"read_status": True, "is_read": True},
+        {"user_id": req.user_id, "read_status": "false"},
     )
     return {"ok": True}
 
