@@ -21,6 +21,7 @@ import logging
 import math
 import os
 import uuid
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -1724,7 +1725,9 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
             400,
             "Strategy logic must define a callable 'strategy(df)' function (e.g. from backtest). Run a backtest first and deploy from Strategy Studio.",
         )
+    deployment_uuid = str(uuid.uuid4())
     payload = {
+        "id": deployment_uuid,
         "user_id": req.user_id,
         "broker_name": req.broker_name,
         "strategy_id": req.strategy_id,
@@ -1738,10 +1741,12 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
         payload["angel_symbol"] = req.angel_symbol
     if req.token is not None:
         payload["token"] = req.token
-    row = _sb_insert("strategy_deployments", payload)
-    if not row:
-        raise HTTPException(503, "Failed to save deployment to Supabase.")
-    strategy_deployment_id = row.get("id")
+    try:
+        row = _sb_insert_raise("strategy_deployments", payload)
+    except Exception as e:
+        print(f"CRITICAL DB ERROR: {str(e)}")
+        raise HTTPException(500, f"Failed to save deployment to Supabase: {e}")
+    strategy_deployment_id = row.get("id") or deployment_uuid
     if not strategy_deployment_id:
         return {"ok": True, "id": None, "status": "Live", "message": "Strategy is live."}
 
@@ -1753,21 +1758,28 @@ async def deploy_strategy_live(req: DeployStrategyRequest):
         limit=500,
     )
     client_count = len(clients) if clients else 0
-    target_accounts = f"{client_count} Client Accounts" if client_count > 0 else "Personal Angel One"
+    target_accounts_label = f"{client_count} Client Accounts" if client_count > 0 else "Personal Angel One"
+    raw_target_accounts = target_accounts_label
+    try:
+        target_accounts_value = raw_target_accounts if isinstance(raw_target_accounts, str) else json.dumps(raw_target_accounts)
+    except TypeError:
+        target_accounts_value = str(raw_target_accounts)
 
     deployment_id = str(uuid.uuid4())
-    live_row = _sb_insert("live_deployments", {
-        "deployment_id": deployment_id,
-        "strategy_deployment_id": strategy_deployment_id,
-        "user_id": req.user_id,
-        "strategy_name": req.strategy_name[:256] if req.strategy_name else "Live strategy",
-        "symbol": (req.symbol or "").strip() or None,
-        "capital": float(req.capital) if req.capital is not None else None,
-        "target_accounts": target_accounts,
-        "status": "running",
-    })
-    if not live_row:
-        return {"ok": True, "id": strategy_deployment_id, "deployment_id": None, "status": "Live", "message": "Strategy saved; engine table unavailable. Restart or check DB."}
+    try:
+        live_row = _sb_insert_raise("live_deployments", {
+            "deployment_id": deployment_id,
+            "strategy_deployment_id": strategy_deployment_id,
+            "user_id": req.user_id,
+            "strategy_name": req.strategy_name[:256] if req.strategy_name else "Live strategy",
+            "symbol": (req.symbol or "").strip() or None,
+            "capital": float(req.capital) if req.capital is not None else None,
+            "target_accounts": target_accounts_value,
+            "status": "running",
+        })
+    except Exception as e:
+        print(f"CRITICAL DB ERROR: {str(e)}")
+        raise HTTPException(500, f"Failed to create live deployment: {e}")
 
     task = asyncio.create_task(_run_single_deployment_loop(deployment_id))
     active_live_deployments[deployment_id] = task
