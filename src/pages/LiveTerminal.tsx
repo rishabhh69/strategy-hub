@@ -1219,9 +1219,9 @@ export default function LiveTerminal() {
                   <p className="text-xs text-muted-foreground">No bots deployed</p>
                 </div>
               ) : (
-                <div className="space-y-1.5 overflow-auto">
+                <div className="space-y-1.5 overflow-auto" style={{ maxHeight: "360px" }}>
                   {deployedBots.map(bot => {
-                    const isSelected = selectedBot?.id === bot.id;
+                    const isSelected = selectedBot?.bot_id === bot.bot_id;
                     const scoreColor =
                       bot.healthStatus === "healthy" ? "text-profit" :
                       bot.healthStatus === "warning"  ? "text-yellow-400" : "text-loss";
@@ -1231,7 +1231,7 @@ export default function LiveTerminal() {
 
                     return (
                       <Card
-                        key={bot.id}
+                        key={bot.bot_id}
                         onClick={() => {
                           setSelectedBot(isSelected ? null : bot);
                           setSelectedInstrument(getInstrumentByValueOrDefault(bot.ticker));
@@ -1240,14 +1240,14 @@ export default function LiveTerminal() {
                           isSelected ? "border-primary bg-primary/5 shadow-md" : "hover:border-border/80"
                         }`}
                       >
-                        <CardContent className="p-3">
-                          {/* ── Top row: title + controls ── */}
-                          <div className="flex items-start justify-between mb-1.5">
-                            <div className="min-w-0">
+                        <CardContent className="p-2.5">
+                          {/* ── Row 1: title + status + STOP button ── */}
+                          <div className="flex items-center justify-between gap-1 mb-1">
+                            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                              <Bot className="w-3 h-3 text-primary shrink-0" />
                               <p className="font-medium text-foreground text-xs truncate">{bot.strategyTitle}</p>
-                              <p className="text-[10px] text-muted-foreground">{bot.label} · qty {bot.qty}</p>
                             </div>
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1.5 shrink-0">
                               <StatusBadge status={bot.status} />
                               <button
                                 onClick={async e => {
@@ -1266,40 +1266,39 @@ export default function LiveTerminal() {
                                   if (selectedBot?.bot_id === bot.bot_id) setSelectedBot(null);
                                   toast.warning(`Bot "${bot.strategyTitle}" stopped.`);
                                 }}
-                                className="text-muted-foreground hover:text-loss ml-1">
-                                <X className="w-3 h-3" />
+                                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-loss/40 bg-loss/10 text-loss hover:bg-loss/25 transition-colors text-[10px] font-semibold"
+                                title="Stop this bot"
+                              >
+                                <Square className="w-2.5 h-2.5" />
+                                Stop
                               </button>
                             </div>
                           </div>
 
-                          {/* ── P&L row ── */}
-                          <div className="flex items-center justify-between text-xs mb-1.5">
-                            <span className="text-muted-foreground">P&amp;L</span>
+                          {/* ── Row 2: symbol · qty · P&L ── */}
+                          <div className="flex items-center justify-between text-[10px] mb-1.5">
+                            <span className="text-muted-foreground">{bot.label} · qty {bot.qty}</span>
                             <span className={`font-data font-semibold ${bot.pnl >= 0 ? "text-profit" : "text-loss"}`}>
-                              {bot.pnl >= 0 ? "+" : ""}₹{fmt(bot.pnl)}
+                              P&amp;L {bot.pnl >= 0 ? "+" : ""}₹{fmt(bot.pnl)}
                             </span>
                           </div>
 
-                          {/* ── Compact Greed AI summary bar (always visible once loaded) ── */}
+                          {/* ── Compact Greed AI signal + health bar ── */}
                           {bot.healthScore !== undefined && (() => {
                             const sigColor: Record<string, string> = {
-                              STRONG_BUY:  "text-emerald-400",
-                              BUY:         "text-profit",
-                              HOLD:        "text-yellow-400",
-                              SELL:        "text-orange-400",
-                              STRONG_SELL: "text-loss",
+                              STRONG_BUY: "text-emerald-400", BUY: "text-profit",
+                              HOLD: "text-yellow-400", SELL: "text-orange-400", STRONG_SELL: "text-loss",
                             };
                             const sigBg: Record<string, string> = {
-                              STRONG_BUY:  "bg-emerald-500/20 border-emerald-500/40",
-                              BUY:         "bg-green-500/15 border-green-500/30",
-                              HOLD:        "bg-yellow-500/15 border-yellow-500/30",
-                              SELL:        "bg-orange-500/15 border-orange-500/30",
+                              STRONG_BUY: "bg-emerald-500/20 border-emerald-500/40",
+                              BUY: "bg-green-500/15 border-green-500/30",
+                              HOLD: "bg-yellow-500/15 border-yellow-500/30",
+                              SELL: "bg-orange-500/15 border-orange-500/30",
                               STRONG_SELL: "bg-red-500/15 border-red-500/30",
                             };
                             const sig = bot.signal ?? "HOLD";
                             return (
                               <div className="space-y-1">
-                                {/* Signal + score row */}
                                 <div className="flex items-center justify-between">
                                   <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-mono font-bold tracking-widest ${sigBg[sig] ?? "bg-muted/30 border-border"} ${sigColor[sig] ?? "text-foreground"}`}>
                                     <Brain className="w-2.5 h-2.5" />
@@ -1309,154 +1308,52 @@ export default function LiveTerminal() {
                                     {bot.healthScore}/100
                                   </span>
                                 </div>
-                                {/* Bar */}
                                 <div className="w-full h-1 rounded-full bg-muted/60 overflow-hidden">
-                                  <div
-                                    className={`h-full rounded-full transition-all duration-700 ${barColor}`}
-                                    style={{ width: `${bot.healthScore}%` }}
-                                  />
+                                  <div className={`h-full rounded-full transition-all duration-700 ${barColor}`}
+                                    style={{ width: `${bot.healthScore}%` }} />
                                 </div>
                               </div>
                             );
                           })()}
 
-                          {/* ── Diagnostics Drawer — expands when bot card is selected ── */}
+                          {/* ── Expanded diagnostics (click to expand) ── */}
                           {isSelected && bot.healthScore !== undefined && (
-                            <div className="mt-3 pt-3 border-t border-border/40 animate-in fade-in slide-in-from-top-2 duration-250">
-
-                              {/* ── Signal banner ── */}
-                              {(() => {
-                                const sig = bot.signal ?? "HOLD";
-                                const bannerBg: Record<string,string> = {
-                                  STRONG_BUY: "bg-emerald-500/15 border-emerald-500/30 text-emerald-300",
-                                  BUY:        "bg-green-500/10  border-green-500/25  text-green-400",
-                                  HOLD:       "bg-yellow-500/10 border-yellow-500/25 text-yellow-300",
-                                  SELL:       "bg-orange-500/10 border-orange-500/25 text-orange-300",
-                                  STRONG_SELL:"bg-red-500/15    border-red-500/30    text-red-300",
-                                };
-                                const cls = bannerBg[sig] ?? "bg-muted/30 border-border text-foreground";
-                                return (
-                                  <div className={`flex items-center justify-between px-2 py-1 rounded-md border mb-2.5 ${cls}`}>
-                                    <span className="text-[10px] font-mono font-bold tracking-widest flex items-center gap-1">
-                                      <Brain className="w-3 h-3" />
-                                      {sig.replace("_", " ")}
-                                    </span>
-                                    <span className="text-[10px] font-mono">
-                                      CONF&nbsp;{bot.confidence ?? "—"}%
-                                    </span>
-                                  </div>
-                                );
-                              })()}
-
-                              {/* ── 3-col grid: gap-4, overflow/truncate so MARKET and INSIGHT don't bleed ── */}
-                              <div className="grid grid-cols-3 gap-4 mb-2.5 min-w-0">
-
-                                {/* Col 1 — Validity */}
-                                <div className="flex flex-col gap-1 min-w-0 px-2 py-1">
-                                  <p className="text-[9px] text-muted-foreground/60 uppercase tracking-widest font-semibold">Validity</p>
-                                  <div className="flex flex-col items-center gap-0.5">
-                                    <span className={`text-xl font-bold font-data leading-none ${scoreColor}`}>
-                                      {bot.healthScore}
-                                    </span>
-                                    <span className="text-[8px] text-muted-foreground">/ 100</span>
-                                    <div className="w-full h-1.5 rounded-full bg-muted/60 overflow-hidden mt-1">
-                                      <div className={`h-full rounded-full transition-all duration-700 ${barColor}`}
-                                        style={{ width: `${bot.healthScore}%` }} />
-                                    </div>
-                                    <span className={`text-[8px] font-bold mt-0.5 tracking-wider truncate max-w-full ${scoreColor}`}>
-                                      {bot.healthStatus?.toUpperCase()}
-                                    </span>
-                                  </div>
+                            <div className="mt-2 pt-2 border-t border-border/40 animate-in fade-in duration-200 space-y-2">
+                              {/* Compact 2x2 metrics grid */}
+                              <div className="grid grid-cols-4 gap-1.5 text-center">
+                                <div>
+                                  <p className="text-[8px] text-muted-foreground/60 uppercase">Market</p>
+                                  <p className={`text-[10px] font-mono font-bold ${
+                                    bot.marketState === "TRENDING" ? "text-profit" :
+                                    bot.marketState === "VOLATILE" ? "text-yellow-400" : "text-foreground/70"
+                                  }`}>{bot.marketState ?? "—"}</p>
                                 </div>
-
-                                {/* Col 2 — Market Metrics */}
-                                <div className="flex flex-col gap-1 min-w-0 overflow-hidden px-2 py-1">
-                                  <p className="text-[9px] text-muted-foreground/60 uppercase tracking-widest font-semibold">Market</p>
-                                  <div className="font-mono text-[9px] space-y-1.5">
-                                    <div className="flex flex-col min-w-0">
-                                      <span className="text-muted-foreground/60">State</span>
-                                      <span className={`font-bold truncate ${bot.marketState === "TRENDING"  ? "text-profit" :
-                                        bot.marketState === "VOLATILE"  ? "text-yellow-400" :
-                                                                          "text-foreground/70"
-                                      }`}>{bot.marketState ?? "—"}</span>
-                                    </div>
-                                    <div className="flex flex-col min-w-0">
-                                      <span className="text-muted-foreground/60">Vol Z</span>
-                                      <span className={`font-bold truncate ${(bot.volZ ?? 0) >= 2   ? "text-loss" :
-                                        (bot.volZ ?? 0) >= 1   ? "text-yellow-400" :
-                                                                  "text-profit"
-                                      }`}>{bot.volZ?.toFixed(2) ?? "—"}σ</span>
-                                    </div>
-                                    <div className="flex flex-col min-w-0">
-                                      <span className="text-muted-foreground/60">Chg</span>
-                                      <span className={`font-bold truncate ${(bot.changePct ?? 0) >= 0 ? "text-profit" : "text-loss"}`}>
-                                        {bot.changePct != null ? `${bot.changePct >= 0 ? "+" : ""}${bot.changePct.toFixed(2)}%` : "—"}
-                                      </span>
-                                    </div>
-                                  </div>
+                                <div>
+                                  <p className="text-[8px] text-muted-foreground/60 uppercase">Chg</p>
+                                  <p className={`text-[10px] font-mono font-bold ${(bot.changePct ?? 0) >= 0 ? "text-profit" : "text-loss"}`}>
+                                    {bot.changePct != null ? `${bot.changePct >= 0 ? "+" : ""}${bot.changePct.toFixed(1)}%` : "—"}
+                                  </p>
                                 </div>
-
-                                {/* Col 3 — Insight */}
-                                <div className="flex flex-col gap-1 min-w-0 overflow-hidden px-2 py-1">
-                                  <p className="text-[9px] text-muted-foreground/60 uppercase tracking-widest font-semibold">Insight</p>
-                                  <p className="text-[9px] text-muted-foreground leading-tight break-words overflow-hidden line-clamp-4">
-                                    {bot.greedInsight ?? "Awaiting market data…"}
+                                <div>
+                                  <p className="text-[8px] text-muted-foreground/60 uppercase">Mom</p>
+                                  <p className={`text-[10px] font-mono font-bold ${(bot.momentumScore ?? 0) >= 0 ? "text-profit" : "text-loss"}`}>
+                                    {bot.momentumScore != null ? `${bot.momentumScore >= 0 ? "+" : ""}${bot.momentumScore}` : "—"}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-[8px] text-muted-foreground/60 uppercase">Risk</p>
+                                  <p className={`text-[10px] font-mono font-bold ${
+                                    (bot.riskFactor ?? 0) >= 3.5 ? "text-loss" :
+                                    (bot.riskFactor ?? 0) >= 2 ? "text-yellow-400" : "text-profit"
+                                  }`}>
+                                    {bot.riskFactor != null ? `${bot.riskFactor.toFixed(1)}/5` : "—"}
                                   </p>
                                 </div>
                               </div>
-
-                              {/* ── Momentum + Risk bars ── */}
-                              <div className="grid grid-cols-2 gap-2">
-
-                                {/* Momentum */}
-                                <div>
-                                  <div className="flex justify-between mb-0.5">
-                                    <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wider">Momentum</span>
-                                    <span className={`text-[9px] font-mono font-bold ${
-                                      (bot.momentumScore ?? 0) >= 0 ? "text-profit" : "text-loss"
-                                    }`}>
-                                      {bot.momentumScore != null ? `${bot.momentumScore >= 0 ? "+" : ""}${bot.momentumScore}` : "—"}
-                                    </span>
-                                  </div>
-                                  {/* Bipolar bar centred at 0 */}
-                                  <div className="relative w-full h-1.5 rounded-full bg-muted/60 overflow-hidden">
-                                    {bot.momentumScore != null && (
-                                      bot.momentumScore >= 0 ? (
-                                        <div className="absolute top-0 left-1/2 h-full bg-profit rounded-full transition-all duration-700"
-                                          style={{ width: `${Math.min(50, bot.momentumScore / 2)}%` }} />
-                                      ) : (
-                                        <div className="absolute top-0 h-full bg-loss rounded-full transition-all duration-700"
-                                          style={{ right: "50%", width: `${Math.min(50, Math.abs(bot.momentumScore) / 2)}%` }} />
-                                      )
-                                    )}
-                                    <div className="absolute top-0 left-1/2 w-px h-full bg-border/60" />
-                                  </div>
-                                </div>
-
-                                {/* Risk Factor */}
-                                <div>
-                                  <div className="flex justify-between mb-0.5">
-                                    <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wider">Risk</span>
-                                    <span className={`text-[9px] font-mono font-bold ${
-                                      (bot.riskFactor ?? 0) >= 3.5 ? "text-loss" :
-                                      (bot.riskFactor ?? 0) >= 2   ? "text-yellow-400" :
-                                                                      "text-profit"
-                                    }`}>
-                                      {bot.riskFactor != null ? `${bot.riskFactor.toFixed(1)}/5` : "—"}
-                                    </span>
-                                  </div>
-                                  <div className="w-full h-1.5 rounded-full bg-muted/60 overflow-hidden">
-                                    <div
-                                      className={`h-full rounded-full transition-all duration-700 ${
-                                        (bot.riskFactor ?? 0) >= 3.5 ? "bg-loss" :
-                                        (bot.riskFactor ?? 0) >= 2   ? "bg-yellow-500" : "bg-profit"
-                                      }`}
-                                      style={{ width: `${((bot.riskFactor ?? 0) / 5) * 100}%` }}
-                                    />
-                                  </div>
-                                </div>
-
-                              </div>
+                              {/* Insight */}
+                              <p className="text-[9px] text-muted-foreground leading-snug line-clamp-2">
+                                {bot.greedInsight ?? "Awaiting market data…"}
+                              </p>
                             </div>
                           )}
 

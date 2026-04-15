@@ -206,6 +206,13 @@ default_origins = [
     "https://www.tradeky.in",
     "https://tradeky.vercel.app",
     "https://tradeky.onrender.com",
+    # Local development
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://localhost:8081",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
 ]
 cors_origins = [o for o in [frontend_origin, *default_origins] if o]
 
