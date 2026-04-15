@@ -1321,6 +1321,17 @@ def _mem_add_log(user_id: str, entry: Dict) -> None:
         })
 
 
+def _mem_add_tick_log(user_id: str, entry: Dict) -> None:
+    """
+    Add a bot-tick log entry to in-memory order log ONLY.
+    Tick entries are ephemeral (not persisted to Supabase) so they surface
+    in the LiveTerminal order log during the session but don't pollute the DB.
+    """
+    logs = _mem_get_logs(user_id)
+    logs.insert(0, entry)
+    _MEM_LOGS[user_id] = logs
+
+
 def _mem_get_day_pnl(user_id: str) -> float:
     """Return today's realized P&L, deriving from log on first access."""
     if user_id not in _MEM_DAY_PNL:
@@ -1449,6 +1460,7 @@ class DeployBotRequest(BaseModel):
     quantity:           int = Field(..., ge=1, le=1_000_000)
     title:              str = Field(default="", max_length=256)
     inline_logic_text:  str = Field(default="", max_length=100_000)  # from Strategy Studio when Supabase save skipped
+    interval:           str = Field(default="5m", pattern="^(1m|5m|15m|1d)$")  # chart interval to fetch candles at
 
     @field_validator("user_id")
     @classmethod
@@ -2885,123 +2897,501 @@ async def bot_worker(
     symbol:        str,
     quantity:      int,
     strategy_id:   str,
+    interval:      str = "5m",
 ) -> None:
     """
-    Runs a strategy in a 60-second polling loop.
-    On each tick:
-      1. Fetches latest 5-day / 5-minute OHLCV data for the symbol.
-      2. Runs strategy_code through the _SAFE_BUILTINS sandbox.
-      3. Reads the last row's `signal` column (1 = buy, -1 = sell, 0 = hold).
-      4. BUY  if signal == 1  and no existing open position.
-      5. SELL if signal == -1 and an open position exists.
+    Paper trading bot -- strictly strategy-driven.
+
+    Every 60 seconds:
+      1. Fetch OHLCV at user-selected chart interval.
+      2. Execute strategy_code (compiled ONCE per deployment for efficiency).
+         Supports:
+           strategy(df)  -> pd.DataFrame with signal / position columns
+           evaluate(df)  -> str "BUY"/"SELL"/"HOLD"  or  int 1/-1/0
+      3. BUY  when signal is bullish AND bot has no open position.
+      4. SELL when signal is bearish AND bot has an open position.
+      5. Every tick: emit a compact log entry the user can see in the terminal.
+      6. Every fill: emit a prominent [BOT ORDER] entry + Supabase notification.
+      7. All errors surface in the user order log (not just the server console).
+      8. Stops cleanly on task cancellation (user pressed Stop).
     """
-    sym_norm = normalise(symbol.upper())
-    print(f"[BotWorker] {bot_id} started  symbol={symbol}  qty={quantity}  user={user_id[:8]}…")
+    sym_norm  = normalise(symbol.upper())
+    bot_label = (_BOT_META.get(bot_id) or {}).get("title", bot_id[:8])
+    print(
+        f"[BotWorker] {bot_id} started  symbol={symbol}  "
+        f"qty={quantity}  interval={interval}  user={user_id[:8]}..."
+    )
+
+    # ---- helpers ----------------------------------------------------------------
+
+    def _push_error_log(msg: str) -> None:
+        """Surface an error message in the user's live order log."""
+        _mem_add_tick_log(user_id, {
+            "user_id":      user_id,
+            "strategy_id":  strategy_id,
+            "symbol":       symbol.upper(),
+            "action":       None,
+            "quantity":     0,
+            "price":        0.0,
+            "realized_pnl": 0.0,
+            "timestamp":    datetime.utcnow().isoformat() + "Z",
+            "order_type":   "bot_error",
+            "status":       "error",
+            "message":      f"[BOT ERROR] {msg}",
+        })
+
+    def _push_notif(title: str, body: str) -> None:
+        """Best-effort Supabase in-app notification.  Never crashes the bot."""
+        if not _sb_ok():
+            return
+        try:
+            _sb_insert("notifications", {
+                "user_id":    user_id,
+                "title":      title,
+                "message":    body,
+                "is_read":    False,
+                "created_at": datetime.utcnow().isoformat() + "Z",
+            })
+        except Exception:
+            pass   # notification failure must never crash the bot
+
+    def _interpret(result) -> tuple:
+        """
+        Normalise any strategy output to (want_buy: bool, want_sell: bool).
+
+        Handles all known patterns:
+          - pd.DataFrame  with 'signal' and/or 'position' columns  [AI template]
+          - str           "BUY" / "SELL" / "HOLD"
+          - int / float   1 / -1 / 0
+          - pd.Series     with 'signal' index key
+        """
+        if isinstance(result, str):
+            s = result.strip().upper()
+            return s == "BUY", s == "SELL"
+
+        if isinstance(result, (int, float)):
+            try:
+                v = int(result)
+                return v == 1, v == -1
+            except (TypeError, ValueError):
+                return False, False
+
+        if isinstance(result, pd.DataFrame) and len(result) > 0:
+            last = result.iloc[-1]
+            sv, pv = 0, 0
+            if "signal" in result.columns:
+                try:
+                    sv = int(last["signal"]) if pd.notna(last["signal"]) else 0
+                except (TypeError, ValueError):
+                    sv = 0
+            if "position" in result.columns:
+                try:
+                    pv = int(last["position"]) if pd.notna(last["position"]) else 0
+                except (TypeError, ValueError):
+                    pv = 0
+            return (sv == 1 or pv == 1), (sv == -1 or pv == -1)
+
+        if isinstance(result, pd.Series):
+            try:
+                v = int(result.get("signal", result.iloc[-1]))
+                return v == 1, v == -1
+            except (TypeError, ValueError, IndexError):
+                return False, False
+
+        return False, False
+
+    # ---- interval -> Yahoo Finance range mapping --------------------------------
+    _RANGE_MAP: Dict[str, str] = {"1m": "1d", "5m": "1d", "15m": "5d", "1d": "2y"}
+    fetch_range    = _RANGE_MAP.get(interval, "1d")
+    fetch_interval = interval
+
+    # ---- compile strategy code ONCE (fail-fast before the polling loop) --------
+    # Inject ta and pandas_ta so complex strategies have all standard imports.
+    strategy_globals: Dict[str, Any] = {
+        "__builtins__": builtins,
+        "pd":   pd,
+        "np":   np,
+        "math": math,
+    }
+    for _alias, _mname in [("ta", "ta"), ("pandas_ta", "pandas_ta")]:
+        try:
+            import importlib as _il
+            strategy_globals[_alias] = _il.import_module(_mname)
+        except ImportError:
+            pass
+
+    _sloc: Dict[str, Any] = {}
+    try:
+        exec(strategy_code, strategy_globals, _sloc)  # noqa: S102
+    except Exception as exc:
+        err = f"Strategy compile error: {exc}"
+        print(f"[BotWorker] {bot_id} -- {err}")
+        _push_error_log(err)
+        return   # cannot continue -- exit immediately
+
+    # Accept both strategy(df) and evaluate(df) as the entry-point name
+    _fn = _sloc.get("strategy") or _sloc.get("evaluate")
+    if not callable(_fn):
+        err = "No callable 'strategy' or 'evaluate' function found in strategy code."
+        print(f"[BotWorker] {bot_id} -- {err}")
+        _push_error_log(err)
+        return
+
+    # ---- extract risk-management parameters from strategy code -------------------
+    # Users can define STOP_LOSS = 2.0  (means 2%),  TAKE_PROFIT = 5.0,
+    # TRAILING_SL = 1.5  as top-level variables in their strategy Python code.
+    # If not defined, defaults to 0 (disabled).
+    def _safe_float(val, default: float = 0.0) -> float:
+        try:
+            return float(val) if val is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    stop_loss_pct   = _safe_float(_sloc.get("STOP_LOSS", _sloc.get("stop_loss", _sloc.get("sl", 0))))
+    take_profit_pct = _safe_float(_sloc.get("TAKE_PROFIT", _sloc.get("take_profit", _sloc.get("tp", 0))))
+    trailing_sl_pct = _safe_float(_sloc.get("TRAILING_SL", _sloc.get("trailing_stop", _sloc.get("trailing_sl", 0))))
+
+    # Clamp to sane range (0-50%); negative means disabled
+    stop_loss_pct   = max(0.0, min(50.0, stop_loss_pct))
+    take_profit_pct = max(0.0, min(200.0, take_profit_pct))
+    trailing_sl_pct = max(0.0, min(50.0, trailing_sl_pct))
+
+    if stop_loss_pct > 0 or take_profit_pct > 0 or trailing_sl_pct > 0:
+        print(
+            f"[BotWorker] {bot_id} risk params:  "
+            f"SL={stop_loss_pct}%  TP={take_profit_pct}%  TSL={trailing_sl_pct}%"
+        )
+        _mem_add_tick_log(user_id, {
+            "user_id":      user_id,
+            "strategy_id":  strategy_id,
+            "symbol":       symbol.upper(),
+            "action":       None,
+            "quantity":     0,
+            "price":        0.0,
+            "realized_pnl": 0.0,
+            "timestamp":    datetime.utcnow().isoformat() + "Z",
+            "order_type":   "bot_tick",
+            "status":       "info",
+            "message": (
+                f"[BOT CONFIG] Risk params loaded: "
+                f"SL={stop_loss_pct}%  TP={take_profit_pct}%  "
+                f"Trailing={trailing_sl_pct}%"
+            ),
+        })
+
+    # ---- local state ------------------------------------------------------------
+    in_position: bool = False
+    entry_price: float = 0.0   # price at which BUY was filled
+    peak_price:  float = 0.0   # highest price since entry (for trailing stop)
+    tick_n:      int  = 0
 
     try:
         while True:
+            tick_n += 1
             try:
-                # ── 1. Fetch OHLCV (run sync IO in thread pool) ──────────────
+                # 1. fetch OHLCV ---------------------------------------------------
                 bars: List[Dict] = await asyncio.to_thread(
-                    _yahoo_v8, sym_norm, "5d", "5m"
+                    _yahoo_v8, sym_norm, fetch_range, fetch_interval
                 )
                 if not bars or len(bars) < 5:
-                    print(f"[BotWorker] {bot_id} — not enough data ({len(bars)} bars), skipping tick.")
+                    bars = await asyncio.to_thread(_yahoo_v8, sym_norm, "5d", "1d")
+                if not bars or len(bars) < 2:
+                    _push_error_log(
+                        f"Not enough market data for {symbol.upper()} "
+                        f"({len(bars)} bars).  Retrying next tick."
+                    )
                     await asyncio.sleep(60)
                     continue
 
                 df = pd.DataFrame(bars)
-                # Rename columns to match the strategy template expectations
-                df.rename(columns={
-                    "open": "open", "high": "high", "low": "low",
-                    "close": "close", "volume": "volume",
-                }, inplace=True)
-                # Ensure a `date` column for strategies that reference it
                 if "time" in df.columns:
                     df["date"] = pd.to_datetime(df["time"], unit="s", utc=True)
                 df = df.dropna(subset=["close"])
-
-                # ── 2. Execute strategy (full builtins so imports and all names work) ──
-                g: Dict[str, Any] = {
-                    "__builtins__": builtins,
-                    "pd":           pd,
-                    "np":           np,
-                    "math":         math,
-                }
-                loc: Dict[str, Any] = {}
                 try:
-                    exec(strategy_code, g, loc)  # noqa: S102
+                    close_px = float(df["close"].iloc[-1])
+                except (IndexError, KeyError, TypeError, ValueError):
+                    close_px = 0.0
+
+                # 2. run strategy -------------------------------------------------
+                try:
+                    strategy_result = _fn(df.copy())
                 except Exception as exc:
-                    print(f"[BotWorker] {bot_id} — strategy error: {exc}. Bot stopped.")
-                    break
-
-                if "strategy" not in loc:
-                    print(f"[BotWorker] {bot_id} — no 'strategy' function in code. Bot stopped.")
-                    break
-
-                result_df = loc["strategy"](df.copy())
-
-                # ── 3. Read last signal ───────────────────────────────────────
-                if "signal" not in result_df.columns:
-                    print(f"[BotWorker] {bot_id} — strategy returned no 'signal' column. Skipping.")
+                    err_msg = f"strategy(df) error: {exc}"
+                    print(f"[BotWorker] {bot_id} -- {err_msg}")
+                    _push_error_log(err_msg)
                     await asyncio.sleep(60)
                     continue
 
-                last_signal = int(result_df["signal"].iloc[-1])
-                positions   = _mem_get_positions(user_id)
-                has_pos     = any(p.get("symbol") == symbol.upper() for p in positions)
+                # 3. interpret signal ---------------------------------------------
+                want_buy, want_sell = _interpret(strategy_result)
+
+                # resync in_position with actual memory (handles restarts/manual trades)
+                positions_mem = _mem_get_positions(user_id)
+                has_pos = any(p.get("symbol") == symbol.upper() for p in positions_mem)
+                if has_pos != in_position:
+                    in_position = has_pos
+                    # If re-syncing into a position, recover entry price from avg_price
+                    if in_position and entry_price <= 0:
+                        pos_match = next(
+                            (p for p in positions_mem if p.get("symbol") == symbol.upper()),
+                            None,
+                        )
+                        if pos_match:
+                            entry_price = float(pos_match.get("average_price", 0))
+                            peak_price  = max(entry_price, close_px)
+
+                # Update peak price for trailing stop tracking
+                if in_position and close_px > 0:
+                    peak_price = max(peak_price, close_px)
+
+                # 3b. Stop-loss / Take-profit / Trailing-stop enforcement ----------
+                #     These override the strategy signal and force a protective exit.
+                sl_triggered  = False
+                tp_triggered  = False
+                tsl_triggered = False
+                trigger_label = ""
+
+                if in_position and close_px > 0 and entry_price > 0:
+                    pnl_pct = ((close_px - entry_price) / entry_price) * 100
+
+                    # Stop-loss check: loss exceeds threshold
+                    if stop_loss_pct > 0 and pnl_pct <= -stop_loss_pct:
+                        sl_triggered = True
+                        want_sell = True
+                        trigger_label = f"SL triggered (loss {pnl_pct:+.1f}%)"
+
+                    # Take-profit check: profit exceeds threshold
+                    elif take_profit_pct > 0 and pnl_pct >= take_profit_pct:
+                        tp_triggered = True
+                        want_sell = True
+                        trigger_label = f"TP triggered (profit {pnl_pct:+.1f}%)"
+
+                    # Trailing stop check: price dropped from peak
+                    elif trailing_sl_pct > 0 and peak_price > 0:
+                        drop_from_peak = ((peak_price - close_px) / peak_price) * 100
+                        if drop_from_peak >= trailing_sl_pct:
+                            tsl_triggered = True
+                            want_sell = True
+                            trigger_label = (
+                                f"Trailing SL triggered "
+                                f"(peak Rs{peak_price:,.2f}, drop {drop_from_peak:.1f}%)"
+                            )
+
+                # 4. tick log (capped at 200 to keep memory healthy) ---------------
+                tick_ts = datetime.utcnow().isoformat() + "Z"
+                if sl_triggered or tp_triggered or tsl_triggered:
+                    lbl = trigger_label
+                    st  = "sl_trigger" if sl_triggered else (
+                          "tp_trigger" if tp_triggered else "tsl_trigger")
+                elif want_buy and not in_position:
+                    lbl, st = "BUY signal", "buy_signal"
+                elif want_sell and in_position:
+                    lbl, st = "SELL signal", "sell_signal"
+                elif want_buy:
+                    lbl, st = "BUY (already holding)", "hold"
+                elif want_sell:
+                    lbl, st = "SELL (no position to exit)", "hold"
+                else:
+                    lbl, st = "HOLD", "hold"
+
+                # Build tick message with optional SL/TP info
+                risk_info = ""
+                if in_position and entry_price > 0:
+                    cur_pnl_pct = ((close_px - entry_price) / entry_price) * 100
+                    risk_parts = [f"P&L {cur_pnl_pct:+.1f}%"]
+                    if stop_loss_pct > 0:
+                        risk_parts.append(f"SL@-{stop_loss_pct}%")
+                    if take_profit_pct > 0:
+                        risk_parts.append(f"TP@+{take_profit_pct}%")
+                    if trailing_sl_pct > 0:
+                        risk_parts.append(f"TSL@{trailing_sl_pct}%")
+                    risk_info = f"  [{' | '.join(risk_parts)}]"
+
+                tick_msg = (
+                    f"[BOT #{tick_n}] {symbol.upper()} "
+                    f"Rs{close_px:,.2f}  --  {lbl}{risk_info}"
+                )
+                existing_ticks = sum(
+                    1 for lg in _mem_get_logs(user_id)
+                    if lg.get("order_type") == "bot_tick"
+                )
+                if existing_ticks < 200:
+                    _mem_add_tick_log(user_id, {
+                        "user_id":      user_id,
+                        "strategy_id":  strategy_id,
+                        "symbol":       symbol.upper(),
+                        "action":       None,
+                        "quantity":     0,
+                        "price":        close_px,
+                        "realized_pnl": 0.0,
+                        "timestamp":    tick_ts,
+                        "order_type":   "bot_tick",
+                        "status":       st,
+                        "message":      tick_msg,
+                    })
 
                 print(
-                    f"[BotWorker] {bot_id}  signal={last_signal:+d}  "
-                    f"has_pos={has_pos}  {symbol}"
+                    f"[BotWorker] {bot_id} #{tick_n}  "
+                    f"buy={want_buy} sell={want_sell} "
+                    f"in_pos={in_position}  {symbol} Rs{close_px:,.2f}"
+                    f"{'  ' + trigger_label if trigger_label else ''}"  
                 )
 
-                # ── 4. Buy signal + no current position ───────────────────────
-                if last_signal == 1 and not has_pos:
+                # 5. BUY ----------------------------------------------------------
+                if want_buy and not in_position:
                     try:
-                        result = await _execute_market_order(
+                        order = await _execute_market_order(
                             user_id, symbol, quantity, "buy", strategy_id
                         )
-                        print(f"[BotWorker] {bot_id} — BUY executed: {result['message']}")
+                        in_position = True
+                        px = order["executed_price"]
+                        entry_price = px      # track for SL/TP
+                        peak_price  = px      # init trailing stop peak
                         if bot_id in _BOT_META:
                             _BOT_META[bot_id]["last_action"] = "buy"
-                            _BOT_META[bot_id]["last_price"]  = result["executed_price"]
+                            _BOT_META[bot_id]["last_price"]  = px
+                            _BOT_META[bot_id]["in_position"] = True
+                        # Build fill message with SL/TP config info
+                        risk_note = ""
+                        if stop_loss_pct > 0 or take_profit_pct > 0 or trailing_sl_pct > 0:
+                            parts = []
+                            if stop_loss_pct > 0:
+                                sl_px = round(px * (1 - stop_loss_pct / 100), 2)
+                                parts.append(f"SL Rs{sl_px:,.2f}")
+                            if take_profit_pct > 0:
+                                tp_px = round(px * (1 + take_profit_pct / 100), 2)
+                                parts.append(f"TP Rs{tp_px:,.2f}")
+                            if trailing_sl_pct > 0:
+                                parts.append(f"TSL {trailing_sl_pct}%")
+                            risk_note = f"  |  {' / '.join(parts)}"
+                        fill_msg = (
+                            f"[BOT ORDER] BUY {quantity} {symbol.upper()} "
+                            f"@ Rs{px:,.2f}  |  {bot_label}{risk_note}"
+                        )
+                        # Prominent log entry for the order (action=buy -> renders as trade)
+                        _mem_add_tick_log(user_id, {
+                            "user_id":      user_id,
+                            "strategy_id":  strategy_id,
+                            "symbol":       symbol.upper(),
+                            "action":       "buy",
+                            "quantity":     quantity,
+                            "price":        px,
+                            "realized_pnl": 0.0,
+                            "timestamp":    datetime.utcnow().isoformat() + "Z",
+                            "order_type":   "bot_fill",
+                            "status":       "filled",
+                            "message":      fill_msg,
+                        })
+                        print(f"[BotWorker] {bot_id} -- BUY executed @ Rs{px:,.2f}{risk_note}")
+                        _push_notif(
+                            f"Paper Bot BUY -- {symbol.upper()}",
+                            f"{bot_label} bought {quantity} {symbol.upper()} @ Rs{px:,.2f}{risk_note}",
+                        )
                     except HTTPException as exc:
-                        print(f"[BotWorker] {bot_id} — BUY failed: {exc.detail}")
+                        err_msg = f"BUY failed: {exc.detail}"
+                        print(f"[BotWorker] {bot_id} -- {err_msg}")
+                        _push_error_log(err_msg)
 
-                # ── 5. Sell signal + open position exists ─────────────────────
-                elif last_signal == -1 and has_pos:
+                # 6. SELL (strategy signal OR SL/TP/TSL triggered) ----------------
+                elif want_sell and in_position:
                     pos_qty = next(
-                        (p["quantity"] for p in positions if p.get("symbol") == symbol.upper()),
-                        quantity
+                        (int(p["quantity"]) for p in positions_mem
+                         if p.get("symbol") == symbol.upper()),
+                        quantity,
                     )
                     try:
-                        result = await _execute_market_order(
-                            user_id, symbol, int(pos_qty), "sell", strategy_id
+                        order = await _execute_market_order(
+                            user_id, symbol, pos_qty, "sell", strategy_id
                         )
-                        print(f"[BotWorker] {bot_id} — SELL executed: {result['message']}")
+                        in_position = False
+                        px  = order["executed_price"]
+                        pnl = order["realized_pnl"]
+                        sgn = "+" if pnl >= 0 else ""
+                        # Reset entry/peak tracking
+                        entry_price = 0.0
+                        peak_price  = 0.0
                         if bot_id in _BOT_META:
                             _BOT_META[bot_id]["last_action"] = "sell"
-                            _BOT_META[bot_id]["last_price"]  = result["executed_price"]
+                            _BOT_META[bot_id]["last_price"]  = px
+                            _BOT_META[bot_id]["in_position"] = False
+                        # Distinct log prefix for SL/TP/TSL vs normal sell
+                        if sl_triggered:
+                            order_prefix = "[BOT SL]"
+                            notif_title  = f"Paper Bot STOP-LOSS -- {symbol.upper()}"
+                        elif tp_triggered:
+                            order_prefix = "[BOT TP]"
+                            notif_title  = f"Paper Bot TAKE-PROFIT -- {symbol.upper()}"
+                        elif tsl_triggered:
+                            order_prefix = "[BOT TSL]"
+                            notif_title  = f"Paper Bot TRAILING-SL -- {symbol.upper()}"
+                        else:
+                            order_prefix = "[BOT ORDER]"
+                            notif_title  = f"Paper Bot SELL -- {symbol.upper()}"
+                        trigger_detail = f"  |  {trigger_label}" if trigger_label else ""
+                        fill_msg = (
+                            f"{order_prefix} SELL {pos_qty} {symbol.upper()} "
+                            f"@ Rs{px:,.2f}  |  P&L {sgn}Rs{pnl:,.2f}{trigger_detail}  |  {bot_label}"
+                        )
+                        _mem_add_tick_log(user_id, {
+                            "user_id":      user_id,
+                            "strategy_id":  strategy_id,
+                            "symbol":       symbol.upper(),
+                            "action":       "sell",
+                            "quantity":     pos_qty,
+                            "price":        px,
+                            "realized_pnl": pnl,
+                            "timestamp":    datetime.utcnow().isoformat() + "Z",
+                            "order_type":   "bot_fill",
+                            "status":       "filled",
+                            "message":      fill_msg,
+                        })
+                        print(
+                            f"[BotWorker] {bot_id} -- {order_prefix} SELL executed "
+                            f"@ Rs{px:,.2f}  P&L {sgn}Rs{pnl:,.2f}"
+                            f"{'  ' + trigger_label if trigger_label else ''}"
+                        )
+                        _push_notif(
+                            notif_title,
+                            f"{bot_label} sold {pos_qty} {symbol.upper()} "
+                            f"@ Rs{px:,.2f}  |  P&L {sgn}Rs{pnl:,.2f}"
+                            f"{'  |  ' + trigger_label if trigger_label else ''}",
+                        )
                     except HTTPException as exc:
-                        print(f"[BotWorker] {bot_id} — SELL failed: {exc.detail}")
+                        err_msg = f"SELL failed: {exc.detail}"
+                        print(f"[BotWorker] {bot_id} -- {err_msg}")
+                        _push_error_log(err_msg)
 
             except asyncio.CancelledError:
-                raise   # let the outer except handle graceful shutdown
-
+                raise   # propagate to outer handler
             except Exception as exc:
-                # Log unexpected errors but keep the loop alive
-                print(f"[BotWorker] {bot_id} — unexpected error: {exc}")
+                err_msg = f"Unexpected error on tick #{tick_n}: {exc}"
+                print(f"[BotWorker] {bot_id} -- {err_msg}")
+                _push_error_log(err_msg)
 
-            await asyncio.sleep(60)   # wait 1 minute before next tick
+            await asyncio.sleep(60)
 
     except asyncio.CancelledError:
-        print(f"[BotWorker] {bot_id} — cancelled gracefully.")
+        print(f"[BotWorker] {bot_id} -- stopped by user after {tick_n} tick(s).")
+        _mem_add_tick_log(user_id, {
+            "user_id":      user_id,
+            "strategy_id":  strategy_id,
+            "symbol":       symbol.upper(),
+            "action":       None,
+            "quantity":     0,
+            "price":        0.0,
+            "realized_pnl": 0.0,
+            "timestamp":    datetime.utcnow().isoformat() + "Z",
+            "order_type":   "bot_tick",
+            "status":       "stopped",
+            "message": (
+                f"[BOT STOPPED] {bot_label} on {symbol.upper()} -- "
+                f"{tick_n} tick(s) run -- stopped by user."
+            ),
+        })
     finally:
-        # Remove from registry when done
         _RUNNING_BOTS.pop(bot_id, None)
         _BOT_META.pop(bot_id, None)
-        print(f"[BotWorker] {bot_id} — exited.")
+        print(f"[BotWorker] {bot_id} -- exited.")
 
 
 # ---------------------------------------------------------------------------
@@ -3060,14 +3450,20 @@ async def deploy_bot(req: DeployBotRequest):
         "symbol":      req.symbol.upper(),
         "quantity":    req.quantity,
         "title":       strategy_title,
+        "interval":    req.interval,
         "started_at":  datetime.utcnow().isoformat() + "Z",
         "last_action": None,
         "last_price":  None,
+        "in_position": False,
     }
 
     # ── 4. Launch background task ─────────────────────────────────────────────
     task = asyncio.create_task(
-        bot_worker(bot_id, req.user_id, strategy_code, req.symbol, req.quantity, strategy_id)
+        bot_worker(
+            bot_id, req.user_id, strategy_code,
+            req.symbol, req.quantity, strategy_id,
+            interval=req.interval,
+        )
     )
     _RUNNING_BOTS[bot_id] = task
 

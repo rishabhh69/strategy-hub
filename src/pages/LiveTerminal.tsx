@@ -359,14 +359,25 @@ export default function LiveTerminal() {
       const res = await fetch(`${API_BASE}/api/paper-trading/logs?user_id=${encodeURIComponent(u)}&limit=500`);
       if (!res.ok) return;
       const rows: any[] = await res.json();
-      const incoming: OrderLogEntry[] = rows.map(lg => ({
-        time:    new Date(lg.timestamp).toLocaleTimeString("en-IN", { hour12: false }),
-        type:    "trade" as const,
-        action:  lg.action as "buy" | "sell",
-        message: `${String(lg.action).toUpperCase()} ${lg.quantity} ${lg.symbol} @ ₹${fmt(Number(lg.price))}` +
-                 (lg.realized_pnl && lg.action === "sell" ? `  P&L ${lg.realized_pnl >= 0 ? "+" : ""}₹${fmt(lg.realized_pnl)}` : ""),
-        pnl:     lg.realized_pnl ?? undefined,
-      }));
+      const incoming: OrderLogEntry[] = rows.map(lg => {
+        // Bot tick entries (per-cycle signal evaluations) — show as signal type, not a trade fill
+        if (lg.order_type === "bot_tick" || (!lg.action && (lg.quantity === 0 || lg.quantity === null))) {
+          return {
+            time:    new Date(lg.timestamp).toLocaleTimeString("en-IN", { hour12: false }),
+            type:    "signal" as const,
+            message: (lg.message as string) || `[BOT] ${lg.symbol} evaluated`,
+          };
+        }
+        // Regular trade fills (BUY / SELL)
+        return {
+          time:    new Date(lg.timestamp).toLocaleTimeString("en-IN", { hour12: false }),
+          type:    "trade" as const,
+          action:  lg.action as "buy" | "sell",
+          message: `${String(lg.action).toUpperCase()} ${lg.quantity} ${lg.symbol} @ ₹${fmt(Number(lg.price))}` +
+                   (lg.realized_pnl && lg.action === "sell" ? `  P&L ${lg.realized_pnl >= 0 ? "+" : ""}₹${fmt(lg.realized_pnl)}` : ""),
+          pnl:     lg.realized_pnl ?? undefined,
+        };
+      });
       // Merge with existing state — deduplicate by "time+message" key, keep all history
       setOrderLog(prev => {
         const existingKeys = new Set(prev.map(e => `${e.time}|${e.message}`));
@@ -633,7 +644,38 @@ export default function LiveTerminal() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [positions.length, positionPrices]);
 
-  // ── 13. Smart auto-scroll — only scroll to top (newest) if user hasn't scrolled ──
+  // ── 13. Sync bot status from backend every 30 s ─────────────────────────────
+  // Polls /running-bots to transition scanning ↔ holding based on in_position flag.
+  useEffect(() => {
+    if (!userId || !deployedBots.length) return;
+    let cancelled = false;
+
+    const syncBotStatus = async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/paper-trading/running-bots?user_id=${encodeURIComponent(userId)}`
+        );
+        if (!res.ok || cancelled) return;
+        const liveBots: { bot_id: string; in_position?: boolean }[] = await res.json();
+        setDeployedBots(prev => prev.map(bot => {
+          const live = liveBots.find(b => b.bot_id === bot.bot_id);
+          if (!live) {
+            // Backend no longer tracking this bot (crashed / stopped externally)
+            return bot.status === "stopped" ? bot : { ...bot, status: "stopped" as const };
+          }
+          const newStatus = live.in_position ? "holding" : "scanning";
+          return newStatus !== bot.status ? { ...bot, status: newStatus as "scanning" | "holding" } : bot;
+        }));
+      } catch {}
+    };
+
+    syncBotStatus();
+    const id = setInterval(syncBotStatus, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, deployedBots.length]);
+
+  // ── 14. Smart auto-scroll — only scroll to top (newest) if user hasn't scrolled ──
   const logScrollRef = useRef<HTMLDivElement>(null);
   const userScrolledLogRef = useRef(false);
 
@@ -805,6 +847,7 @@ export default function LiveTerminal() {
             quantity:           deployQty,
             title,
             inline_logic_text:  (inlineStrategy!.logicText || "").trim(),
+            interval:           chartInterval,
           }
         : {
             user_id:     uid,
@@ -812,6 +855,7 @@ export default function LiveTerminal() {
             symbol:      symbol,
             quantity:    deployQty,
             title:       (strat!.title || "").trim() || "Strategy",
+            interval:    chartInterval,
           };
 
       const res = await fetch(`${API_BASE}/api/paper-trading/deploy-bot`, {
