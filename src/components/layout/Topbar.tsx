@@ -370,123 +370,131 @@ export function Topbar({ onMenuClick }: TopbarProps) {
 
           {/* Deployed Strategies Modal (all deployments, stop running) */}
           <Dialog open={deployedStrategiesOpen} onOpenChange={setDeployedStrategiesOpen}>
-            <DialogContent className="sm:max-w-md border-border bg-card">
+            <DialogContent className="sm:max-w-lg border-border bg-card">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <Bot className="w-5 h-5 text-primary" />
                   Deployed Strategies
+                  {liveDeployments.length > 0 && (
+                    <Badge variant="outline" className="ml-1 font-data text-xs">{liveDeployments.length}</Badge>
+                  )}
                 </DialogTitle>
                 <p className="text-xs text-muted-foreground font-normal mt-1">
-                  View all deployed strategies: see how many accounts each is on, capital, and stop the bot whenever you want. After a trade is executed, the strategy stops automatically.
+                  Manage all live deployments on your Angel One account. Stop any running bot at any time.
                 </p>
               </DialogHeader>
               <div className="mt-2">
                 {deployedStrategiesLoading ? (
-                  <p className="text-sm text-muted-foreground">Loading…</p>
+                  <div className="flex items-center justify-center py-10">
+                    <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                    <span className="ml-2 text-sm text-muted-foreground">Loading deployments…</span>
+                  </div>
                 ) : liveDeployments.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No deployed strategies yet. Deploy from Strategy Studio (backtest → Deploy → Live).</p>
+                  <div className="flex flex-col items-center justify-center py-10 gap-2 text-center">
+                    <Bot className="w-8 h-8 text-muted-foreground/20" />
+                    <p className="text-sm text-muted-foreground">No deployed strategies yet.</p>
+                    <p className="text-xs text-muted-foreground/60">Deploy from Strategy Studio → Backtest → Deploy → Live</p>
+                  </div>
                 ) : (
-                  <ul className="space-y-3 max-h-[60vh] overflow-y-auto">
-                    {liveDeployments.map((d) => {
-                      const tradeOnBroker = d.order_placed ? "Executed" : d.status === "running" ? "Not yet" : "Stopped";
-                      const executionStatus = d.order_placed
-                        ? "Executed"
-                        : d.status === "running"
-                          ? "Pending"
-                          : "Stopped";
-                      const capitalStr = d.capital != null && !Number.isNaN(d.capital)
-                        ? `₹${Number(d.capital).toLocaleString("en-IN")}`
-                        : null;
-                      const quantityText = d.order_placed
-                        ? "Filled at market"
-                        : capitalStr
-                          ? "Buy: at market (qty from capital/price). Sell: full position."
-                          : "At market";
-                      // Target accounts: handle legacy string labels and new JSON-encoded metadata
-                      let accountsLine = "Deployed on 1 account (Personal Angel One)";
-                      const rawTarget = d.target_accounts;
-                      if (rawTarget) {
-                        let parsed: unknown = rawTarget;
-                        if (typeof rawTarget === "string") {
-                          try {
-                            parsed = JSON.parse(rawTarget);
-                          } catch {
-                            parsed = rawTarget;
+                  <ScrollArea className="max-h-[60vh]">
+                    <div className="space-y-2 pr-2">
+                      {liveDeployments.map((d) => {
+                        const isRunning = d.status === "running";
+                        const isExecuted = !!d.order_placed;
+                        const statusLabel = isExecuted ? "Executed" : isRunning ? "Pending" : "Stopped";
+                        const statusStyle = isExecuted
+                          ? "bg-profit/15 text-profit border-profit/30"
+                          : isRunning
+                            ? "bg-amber-500/15 text-amber-500 border-amber-500/30"
+                            : "bg-muted/40 text-muted-foreground border-border";
+                        const capitalStr = d.capital != null && !Number.isNaN(d.capital)
+                          ? `₹${Number(d.capital).toLocaleString("en-IN")}`
+                          : "—";
+
+                        // Parse target accounts
+                        let accountsLabel = "Personal";
+                        const rawTarget = d.target_accounts;
+                        if (rawTarget) {
+                          let parsed: unknown = rawTarget;
+                          if (typeof rawTarget === "string") {
+                            try { parsed = JSON.parse(rawTarget); } catch { parsed = rawTarget; }
+                          }
+                          if (typeof parsed === "string") {
+                            const m = (parsed as string).match(/^(\d+)\s+Client/);
+                            if (m && parseInt(m[1], 10) > 1) accountsLabel = `${m[1]} Clients`;
+                          } else if (parsed && typeof parsed === "object") {
+                            const ta = parsed as { type?: string; client_name?: string };
+                            const t = (ta.type || "").toLowerCase();
+                            if (t === "all_clients" || t === "all_active_clients") accountsLabel = "All Clients";
+                            else if (t === "single_client" && ta.client_name) accountsLabel = ta.client_name;
                           }
                         }
-                        if (typeof parsed === "string") {
-                          const s = parsed as string;
-                          const accountCountMatch = s.match(/^(\d+)\s+Client/);
-                          const accountCount = accountCountMatch ? parseInt(accountCountMatch[1], 10) : 1;
-                          accountsLine =
-                            accountCount > 1
-                              ? `Deployed on ${accountCount} accounts (Client Accounts)`
-                              : `Deployed on 1 account (Personal Angel One)`;
-                        } else if (parsed && typeof parsed === "object") {
-                          const ta = parsed as { type?: string; client_name?: string };
-                          const t = (ta.type || "").toLowerCase();
-                          if (t === "all_clients" || t === "all_active_clients") {
-                            accountsLine = "Deployed on All Active Client Accounts";
-                          } else if (t === "personal" || !t) {
-                            accountsLine = "Deployed on 1 account (Personal Angel One)";
-                          } else if (t === "single_client" && ta.client_name) {
-                            accountsLine = `Deployed on Client: ${ta.client_name}`;
-                          }
-                        }
-                      }
-                      return (
-                        <li
-                          key={d.deployment_id}
-                          className="flex flex-col gap-2 p-3 rounded-lg border border-border bg-muted/20"
-                        >
-                          <div className="flex flex-row items-start justify-between gap-2">
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium text-foreground truncate">{d.strategy_name || "Strategy"}</p>
-                              <p className="text-xs text-muted-foreground mt-0.5">
-                                {accountsLine}
-                              </p>
-                              <p className="text-xs font-medium text-foreground mt-1">
-                                Capital: {capitalStr ?? "—"}
-                              </p>
-                              <p className="text-[10px] text-muted-foreground/70 mt-0.5">
-                                {d.symbol && <span className="mr-2">Symbol: {d.symbol}</span>}
-                              </p>
-                              <p className="text-[10px] mt-0.5">
-                                Quantity: {quantityText}
-                              </p>
-                              <p className="text-[10px] text-muted-foreground/70 mt-0.5">
-                                Trade on broker: <span className={d.order_placed ? "text-profit font-medium" : ""}>{tradeOnBroker}</span>
-                              </p>
+
+                        return (
+                          <div
+                            key={d.deployment_id}
+                            className={`rounded-lg border p-3 transition-colors ${
+                              isRunning ? "border-border bg-card" : "border-border/60 bg-muted/10 opacity-75"
+                            }`}
+                          >
+                            {/* Row 1: Strategy name + Status badge + Stop button */}
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <div className={`w-2 h-2 rounded-full shrink-0 ${
+                                  isRunning ? "bg-profit animate-pulse" : isExecuted ? "bg-profit" : "bg-muted-foreground"
+                                }`} />
+                                <p className="text-sm font-semibold text-foreground truncate">
+                                  {d.strategy_name || "Strategy"}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${statusStyle}`}>
+                                  {statusLabel}
+                                </span>
+                                {isRunning && (
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    className="h-7 px-2.5 text-xs gap-1"
+                                    disabled={stoppingId === d.deployment_id}
+                                    onClick={() => handleStopDeployment(d.deployment_id)}
+                                  >
+                                    <Square className="w-3 h-3" />
+                                    {stoppingId === d.deployment_id ? "Stopping…" : "Stop"}
+                                  </Button>
+                                )}
+                              </div>
                             </div>
-                            <div className="flex flex-col items-end gap-1.5 shrink-0">
-                              <span className={`text-[10px] font-medium px-2 py-0.5 rounded ${
-                                executionStatus === "Executed"
-                                  ? "bg-profit/20 text-profit"
-                                  : executionStatus === "Pending"
-                                    ? "bg-amber-500/20 text-amber-600 dark:text-amber-400"
-                                    : "bg-muted text-muted-foreground"
-                              }`}>
-                                {executionStatus}
-                              </span>
-                              {d.status === "running" && (
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  className="gap-1.5"
-                                  disabled={stoppingId === d.deployment_id}
-                                  onClick={() => handleStopDeployment(d.deployment_id)}
-                                  title="Stop this strategy"
-                                >
-                                  <Square className="w-3.5 h-3.5" />
-                                  {stoppingId === d.deployment_id ? "Stopping…" : "Stop bot"}
-                                </Button>
+
+                            {/* Row 2: Compact metrics */}
+                            <div className="flex items-center gap-4 text-xs">
+                              {d.symbol && (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-muted-foreground/60">Symbol</span>
+                                  <span className="font-medium text-foreground">{d.symbol}</span>
+                                </div>
                               )}
+                              <div className="flex items-center gap-1">
+                                <span className="text-muted-foreground/60">Capital</span>
+                                <span className="font-medium text-foreground font-data">{capitalStr}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-muted-foreground/60">Account</span>
+                                <span className="font-medium text-foreground">{accountsLabel}</span>
+                              </div>
                             </div>
+
+                            {/* Row 3: Execution info (only if executed) */}
+                            {isExecuted && d.executed_at && (
+                              <p className="text-[10px] text-profit/70 mt-1.5">
+                                Filled at market · {new Date(d.executed_at).toLocaleString("en-IN", { hour12: true, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                              </p>
+                            )}
                           </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                        );
+                      })}
+                    </div>
+                  </ScrollArea>
                 )}
               </div>
             </DialogContent>
