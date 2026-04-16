@@ -370,8 +370,8 @@ export function Topbar({ onMenuClick }: TopbarProps) {
 
           {/* Deployed Strategies Modal (all deployments, stop running) */}
           <Dialog open={deployedStrategiesOpen} onOpenChange={setDeployedStrategiesOpen}>
-            <DialogContent className="sm:max-w-lg border-border bg-card">
-              <DialogHeader>
+            <DialogContent className="sm:max-w-lg border-border bg-card max-h-[85vh] overflow-hidden flex flex-col">
+              <DialogHeader className="shrink-0">
                 <DialogTitle className="flex items-center gap-2">
                   <Bot className="w-5 h-5 text-primary" />
                   Deployed Strategies
@@ -380,14 +380,15 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                   )}
                 </DialogTitle>
                 <p className="text-xs text-muted-foreground font-normal mt-1">
-                  Manage all live deployments on your Angel One account. Stop any running bot at any time.
+                  Manage all live deployments on your Angel One account.
                 </p>
               </DialogHeader>
-              <div className="mt-2">
+
+              <div className="flex-1 min-h-0 overflow-hidden">
                 {deployedStrategiesLoading ? (
                   <div className="flex items-center justify-center py-10">
                     <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                    <span className="ml-2 text-sm text-muted-foreground">Loading deployments…</span>
+                    <span className="ml-2 text-sm text-muted-foreground">Loading…</span>
                   </div>
                 ) : liveDeployments.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-10 gap-2 text-center">
@@ -396,105 +397,101 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                     <p className="text-xs text-muted-foreground/60">Deploy from Strategy Studio → Backtest → Deploy → Live</p>
                   </div>
                 ) : (
-                  <ScrollArea className="max-h-[60vh]">
-                    <div className="space-y-2 pr-2">
-                      {liveDeployments.map((d) => {
-                        const isRunning = d.status === "running";
-                        const isExecuted = !!d.order_placed;
-                        const statusLabel = isExecuted ? "Executed" : isRunning ? "Pending" : "Stopped";
-                        const statusStyle = isExecuted
-                          ? "bg-profit/15 text-profit border-profit/30"
-                          : isRunning
-                            ? "bg-amber-500/15 text-amber-500 border-amber-500/30"
-                            : "bg-muted/40 text-muted-foreground border-border";
-                        const capitalStr = d.capital != null && !Number.isNaN(d.capital)
-                          ? `₹${Number(d.capital).toLocaleString("en-IN")}`
-                          : "—";
+                  <div className="overflow-y-auto max-h-[calc(85vh-10rem)] space-y-2 pr-1">
+                    {liveDeployments.map((d) => {
+                      const isRunning = d.status === "running";
+                      const isExecuted = !!d.order_placed;
+                      const statusLabel = isExecuted ? "Executed" : isRunning ? "Pending" : "Stopped";
+                      const statusStyle = isExecuted
+                        ? "bg-profit/15 text-profit border-profit/30"
+                        : isRunning
+                          ? "bg-amber-500/15 text-amber-500 border-amber-500/30"
+                          : "bg-muted/40 text-muted-foreground border-border";
+                      const capitalStr = d.capital != null && !Number.isNaN(d.capital)
+                        ? `₹${Number(d.capital).toLocaleString("en-IN")}`
+                        : "—";
 
-                        // Parse target accounts
-                        let accountsLabel = "Personal";
-                        const rawTarget = d.target_accounts;
-                        if (rawTarget) {
-                          let parsed: unknown = rawTarget;
-                          if (typeof rawTarget === "string") {
-                            try { parsed = JSON.parse(rawTarget); } catch { parsed = rawTarget; }
-                          }
-                          if (typeof parsed === "string") {
-                            const m = (parsed as string).match(/^(\d+)\s+Client/);
-                            if (m && parseInt(m[1], 10) > 1) accountsLabel = `${m[1]} Clients`;
-                          } else if (parsed && typeof parsed === "object") {
-                            const ta = parsed as { type?: string; client_name?: string };
-                            const t = (ta.type || "").toLowerCase();
-                            if (t === "all_clients" || t === "all_active_clients") accountsLabel = "All Clients";
-                            else if (t === "single_client" && ta.client_name) accountsLabel = ta.client_name;
-                          }
+                      // Parse target accounts
+                      let accountsLabel = "Personal";
+                      const rawTarget = d.target_accounts;
+                      if (rawTarget) {
+                        let parsed: unknown = rawTarget;
+                        if (typeof rawTarget === "string") {
+                          try { parsed = JSON.parse(rawTarget); } catch { parsed = rawTarget; }
                         }
+                        if (typeof parsed === "string") {
+                          const m = (parsed as string).match(/^(\d+)\s+Client/);
+                          if (m && parseInt(m[1], 10) > 1) accountsLabel = `${m[1]} Clients`;
+                        } else if (parsed && typeof parsed === "object") {
+                          const ta = parsed as { type?: string; client_name?: string };
+                          const t = (ta.type || "").toLowerCase();
+                          if (t === "all_clients" || t === "all_active_clients") accountsLabel = "All Clients";
+                          else if (t === "single_client" && ta.client_name) accountsLabel = ta.client_name;
+                        }
+                      }
 
-                        return (
-                          <div
-                            key={d.deployment_id}
-                            className={`rounded-lg border p-3 transition-colors ${
-                              isRunning ? "border-border bg-card" : "border-border/60 bg-muted/10 opacity-75"
-                            }`}
-                          >
-                            {/* Row 1: Strategy name + Status badge + Stop button */}
-                            <div className="flex items-center justify-between gap-2 mb-2">
-                              <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <div className={`w-2 h-2 rounded-full shrink-0 ${
-                                  isRunning ? "bg-profit animate-pulse" : isExecuted ? "bg-profit" : "bg-muted-foreground"
-                                }`} />
-                                <p className="text-sm font-semibold text-foreground truncate">
-                                  {d.strategy_name || "Strategy"}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${statusStyle}`}>
-                                  {statusLabel}
-                                </span>
-                                {isRunning && (
-                                  <Button
-                                    size="sm"
-                                    variant="destructive"
-                                    className="h-7 px-2.5 text-xs gap-1"
-                                    disabled={stoppingId === d.deployment_id}
-                                    onClick={() => handleStopDeployment(d.deployment_id)}
-                                  >
-                                    <Square className="w-3 h-3" />
-                                    {stoppingId === d.deployment_id ? "Stopping…" : "Stop"}
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Row 2: Compact metrics */}
-                            <div className="flex items-center gap-4 text-xs">
-                              {d.symbol && (
-                                <div className="flex items-center gap-1">
-                                  <span className="text-muted-foreground/60">Symbol</span>
-                                  <span className="font-medium text-foreground">{d.symbol}</span>
-                                </div>
-                              )}
-                              <div className="flex items-center gap-1">
-                                <span className="text-muted-foreground/60">Capital</span>
-                                <span className="font-medium text-foreground font-data">{capitalStr}</span>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <span className="text-muted-foreground/60">Account</span>
-                                <span className="font-medium text-foreground">{accountsLabel}</span>
-                              </div>
-                            </div>
-
-                            {/* Row 3: Execution info (only if executed) */}
-                            {isExecuted && d.executed_at && (
-                              <p className="text-[10px] text-profit/70 mt-1.5">
-                                Filled at market · {new Date(d.executed_at).toLocaleString("en-IN", { hour12: true, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      return (
+                        <div
+                          key={d.deployment_id}
+                          className={`rounded-lg border p-3 transition-colors ${
+                            isRunning ? "border-border bg-card" : "border-border/60 bg-muted/10 opacity-70"
+                          }`}
+                        >
+                          {/* Row 1: Strategy name + Status badge + Stop button */}
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <div className="flex items-center gap-2 min-w-0" style={{ maxWidth: "55%" }}>
+                              <div className={`w-2 h-2 rounded-full shrink-0 ${
+                                isRunning ? "bg-profit animate-pulse" : isExecuted ? "bg-profit" : "bg-muted-foreground"
+                              }`} />
+                              <p className="text-xs font-semibold text-foreground truncate" title={d.strategy_name || "Strategy"}>
+                                {d.strategy_name || "Strategy"}
                               </p>
-                            )}
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${statusStyle}`}>
+                                {statusLabel}
+                              </span>
+                              {isRunning && (
+                                <button
+                                  className="flex items-center gap-0.5 px-2 py-1 rounded border border-loss/40 bg-loss/10 text-loss hover:bg-loss/25 transition-colors text-[10px] font-semibold"
+                                  disabled={stoppingId === d.deployment_id}
+                                  onClick={() => handleStopDeployment(d.deployment_id)}
+                                >
+                                  <Square className="w-2.5 h-2.5" />
+                                  {stoppingId === d.deployment_id ? "Stopping…" : "Stop"}
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        );
-                      })}
-                    </div>
-                  </ScrollArea>
+
+                          {/* Row 2: Compact inline metrics */}
+                          <div className="flex items-center gap-3 text-[11px] flex-wrap">
+                            {d.symbol && (
+                              <span className="text-muted-foreground">
+                                <span className="text-muted-foreground/50">Sym</span>{" "}
+                                <span className="font-medium text-foreground">{d.symbol}</span>
+                              </span>
+                            )}
+                            <span className="text-muted-foreground">
+                              <span className="text-muted-foreground/50">Cap</span>{" "}
+                              <span className="font-medium text-foreground font-data">{capitalStr}</span>
+                            </span>
+                            <span className="text-muted-foreground">
+                              <span className="text-muted-foreground/50">Acct</span>{" "}
+                              <span className="font-medium text-foreground">{accountsLabel}</span>
+                            </span>
+                          </div>
+
+                          {/* Row 3: Execution timestamp */}
+                          {isExecuted && d.executed_at && (
+                            <p className="text-[10px] text-profit/70 mt-1">
+                              Filled · {new Date(d.executed_at).toLocaleString("en-IN", { hour12: true, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             </DialogContent>
