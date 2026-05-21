@@ -1,4 +1,4 @@
-import { User, Crown, Bell, Menu, LogOut, CheckCheck, Inbox, Bot, Square } from "lucide-react";
+import { User, Crown, Bell, Menu, LogOut, CheckCheck, Inbox, Bot, Square, Trash2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -119,13 +120,17 @@ export function Topbar({ onMenuClick }: TopbarProps) {
   const [liveDeployments, setLiveDeployments] = useState<LiveDeployment[]>([]);
   const [deployedStrategiesLoading, setDeployedStrategiesLoading] = useState(false);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const fetchLiveDeployments = useCallback(async (uid: string) => {
+  const fetchLiveDeployments = useCallback(async (uid: string, signal?: AbortSignal) => {
     try {
-      const res = await fetch(`${API_BASE}/api/engine/deployments?user_id=${encodeURIComponent(uid)}`);
+      const res = await fetch(`${API_BASE}/api/engine/deployments?user_id=${encodeURIComponent(uid)}`, {
+        signal,
+      });
       if (res.ok) setLiveDeployments(await res.json());
       else setLiveDeployments([]);
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setLiveDeployments([]);
     }
   }, []);
@@ -133,7 +138,13 @@ export function Topbar({ onMenuClick }: TopbarProps) {
   useEffect(() => {
     if (deployedStrategiesOpen && userId) {
       setDeployedStrategiesLoading(true);
-      fetchLiveDeployments(userId).finally(() => setDeployedStrategiesLoading(false));
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      fetchLiveDeployments(userId, controller.signal).finally(() => {
+        clearTimeout(timeout);
+        setDeployedStrategiesLoading(false);
+      });
+      return () => { clearTimeout(timeout); controller.abort(); };
     }
   }, [deployedStrategiesOpen, userId, fetchLiveDeployments]);
 
@@ -164,6 +175,29 @@ export function Topbar({ onMenuClick }: TopbarProps) {
       toast.error("Failed to stop deployment.");
     } finally {
       setStoppingId(null);
+    }
+  };
+
+  const handleDeleteDeployment = async (deploymentId: string) => {
+    if (!userId) return;
+    setDeletingId(deploymentId);
+    try {
+      const res = await fetch(`${API_BASE}/api/engine/delete-deployment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deployment_id: deploymentId, user_id: userId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        toast.success("Deployment removed.");
+        setLiveDeployments(prev => prev.filter(d => d.deployment_id !== deploymentId));
+      } else {
+        toast.error(data?.message || data?.detail || "Failed to delete deployment.");
+      }
+    } catch {
+      toast.error("Failed to delete deployment.");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -379,9 +413,9 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                     <Badge variant="outline" className="ml-1 font-data text-xs">{liveDeployments.length}</Badge>
                   )}
                 </DialogTitle>
-                <p className="text-xs text-muted-foreground font-normal mt-1">
+                <DialogDescription className="text-xs text-muted-foreground font-normal mt-1">
                   Manage all live deployments on your Angel One account.
-                </p>
+                </DialogDescription>
               </DialogHeader>
 
               <div className="flex-1 min-h-0 overflow-hidden">
@@ -451,7 +485,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                               <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${statusStyle}`}>
                                 {statusLabel}
                               </span>
-                              {isRunning && (
+                              {isRunning ? (
                                 <button
                                   className="flex items-center gap-0.5 px-2 py-1 rounded border border-loss/40 bg-loss/10 text-loss hover:bg-loss/25 transition-colors text-[10px] font-semibold"
                                   disabled={stoppingId === d.deployment_id}
@@ -459,6 +493,16 @@ export function Topbar({ onMenuClick }: TopbarProps) {
                                 >
                                   <Square className="w-2.5 h-2.5" />
                                   {stoppingId === d.deployment_id ? "Stopping…" : "Stop"}
+                                </button>
+                              ) : (
+                                <button
+                                  className="flex items-center gap-0.5 px-1.5 py-1 rounded border border-muted-foreground/30 bg-muted/20 text-muted-foreground hover:bg-loss/15 hover:text-loss hover:border-loss/40 transition-colors text-[10px] font-semibold"
+                                  disabled={deletingId === d.deployment_id}
+                                  onClick={() => handleDeleteDeployment(d.deployment_id)}
+                                  title="Delete this deployment"
+                                >
+                                  <Trash2 className="w-2.5 h-2.5" />
+                                  {deletingId === d.deployment_id ? "Deleting…" : "Delete"}
                                 </button>
                               )}
                             </div>

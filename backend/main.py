@@ -1888,6 +1888,41 @@ async def stop_deployment(req: StopDeploymentRequest):
     return {"ok": True, "deployment_id": deployment_id, "status": "stopped", "message": "Deployment halted successfully."}
 
 
+class DeleteDeploymentRequest(BaseModel):
+    deployment_id: str = Field(..., min_length=1, max_length=64)
+    user_id: str = Field(..., min_length=1, max_length=128)
+
+
+@app.post("/api/engine/delete-deployment")
+async def delete_deployment(req: DeleteDeploymentRequest):
+    """Delete a stopped/completed deployment record from live_deployments. Running deployments cannot be deleted."""
+    deployment_id = (req.deployment_id or "").strip()
+    user_id = (req.user_id or "").strip()
+    if not deployment_id or not user_id:
+        raise HTTPException(400, "deployment_id and user_id are required.")
+    if not _sb_ok():
+        raise HTTPException(503, "Supabase is unreachable. Cannot delete deployment.")
+    # Verify the deployment exists and belongs to the user
+    rows = _sb_get("live_deployments", {"deployment_id": f"eq.{deployment_id}", "user_id": f"eq.{user_id}"}, limit=1)
+    if not rows:
+        raise HTTPException(404, "Deployment not found.")
+    status = (rows[0].get("status") or "").strip().lower()
+    if status == "running":
+        raise HTTPException(400, "Cannot delete a running deployment. Stop it first.")
+    # Cancel any lingering task just in case
+    task = active_live_deployments.get(deployment_id)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        active_live_deployments.pop(deployment_id, None)
+    _deployment_position_state.pop(deployment_id, None)
+    _sb_delete("live_deployments", {"deployment_id": deployment_id})
+    return {"ok": True, "deployment_id": deployment_id, "message": "Deployment deleted successfully."}
+
+
 async def _run_single_deployment_loop(deployment_id: str) -> None:
     """
     Per-deployment async loop: run strategy every ~2 min with position state guardrail.

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -191,11 +191,11 @@ export function DeploymentModal({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Deploy Strategy</DialogTitle>
+          <DialogDescription className="text-xs text-muted-foreground">
+            Choose how you want to deploy. Orders are executed strictly when your strategy conditions are met (e.g. signal from your backtest logic).
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <p className="text-xs text-muted-foreground">
-            Choose how you want to deploy. Orders are executed strictly when your strategy conditions are met (e.g. signal from your backtest logic).
-          </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
